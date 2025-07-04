@@ -424,9 +424,9 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	String groundtruth_path = "C:/Users/felix/OneDrive/Documents/Uni/Year 4/project/evaluation/data_scene_flow/training/flow_noc/000" + num + "_10.png";*/
 
 	//// KITTI 2012 train (indexed by image_num)
-	String i1_path = "/app/images/000" + num + "_10.png";
-	String i2_path = "/app/images/000" + num + "_11.png";
-	String groundtruth_path = "/app/images/gt_000" + num + "_10.png";
+	String i1_path = "../data/images/000" + num + "_10.png";
+	String i2_path = "../data/images/000" + num + "_11.png";
+	String groundtruth_path = "../data/flow_gt/gt_000" + num + "_10.png";
 	std::cout << "i1_path: " << i1_path << std::endl;
 	std::cout << "i2_path: " << i2_path << std::endl;
 	std::cout << "gt_path: " << groundtruth_path << std::endl;
@@ -450,7 +450,7 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	i2 = imread(i2_path, 1);
 	im1 = i1;
 	im2 = i2;
-
+    
 	if (!i1.data || !i2.data || i1.empty() || i2.empty())
 	{
 		printf("No image data \n");
@@ -467,7 +467,6 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	i1.convertTo(i1, CV_8U);
 	if (i2.depth() != CV_8U)
 		i2.convertTo(i2, CV_8U);
-
 	if ((method == "farneback" || method == "tvl1" || method == "deepflow" || method == "DISflow_ultrafast" || method == "DISflow_fast" || method == "DISflow_medium") && i1.channels() == 3)
 	{ // 1-channel images are expected
 		cvtColor(i1, i1, COLOR_BGR2GRAY);
@@ -536,7 +535,7 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	{
 		FeatureMatcher algorithm = FeatureMatcher();
 		algorithm.degraf_flow_RLOF(i1, i2, flow, 127, (0.05000000075F), true, (500.0F), (1.5F));
-
+		
 		if (display_images)
 		{
 			// Points for displaying sparse flow field
@@ -649,8 +648,8 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 			// Display all useful output images in one frame
 			cv::Mat win_mat(cv::Size(i1.cols * 2, i1.rows * 3), CV_8UC3);
 
-			imwrite("/app/outputs/06_0.png", i1);
-			imwrite("/app/outputs/06_1.png", i2);
+			imwrite("../data/outputs/06_0.png", i1);
+			imwrite("../data/outputs/06_1.png", i2);
 			// Draw sparse flow field from degraf flow
 			if (method == "degraf_flow_lk" || method == "degraf_flow_rlof")
 			{
@@ -661,7 +660,7 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 					cv::arrowedLine(sparse, points1[i], points2[i], cv::Scalar(0, 0, 0), 2, 8, 0, 0.2);
 				}
 				// imwrite("C:/Users/felix/OneDrive/Documents/Uni/Year 4/project/Images/output/Presentation/lines.png" , sparse);
-				imwrite("/app/outputs/sparse.png", sparse);
+				imwrite("../data/outputs/sparse.png", sparse);
 				//  place in output window
 				sparse.copyTo(win_mat(cv::Rect(0, i1.rows, i1.cols, i1.rows)));
 			}
@@ -673,10 +672,10 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 				cv::line(placeholder, Point2f(i1.cols, 0), Point2f(0, i1.rows), cv::Scalar(0, 0, 0), 2, 8);
 				placeholder.copyTo(win_mat(cv::Rect(0, i1.rows, i1.cols, i1.rows)));
 			}
-			imwrite("/app/outputs/error.png", error);
-			imwrite("/app/outputs/heatmap.png", heatmap);
-			imwrite("/app/outputs/ground.png", ground);
-			imwrite("/app/outputs/flow.png", flow_image);
+			imwrite("../data/outputs/error.png", error);
+			imwrite("../data/outputs/heatmap.png", heatmap);
+			imwrite("../data/outputs/ground.png", ground);
+			imwrite("../data/outputs/flow.png", flow_image);
 			im1.copyTo(win_mat(cv::Rect(0, 0, i1.cols, i1.rows)));
 			im2.copyTo(win_mat(cv::Rect(i1.cols, 0, i1.cols, i1.rows)));
 			flow_image.copyTo(win_mat(cv::Rect(i1.cols, i1.rows, i1.cols, i1.rows)));

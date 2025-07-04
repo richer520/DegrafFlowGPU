@@ -1,7 +1,7 @@
 # 🚗 DeGraF Flow GPU
 
 **GPU-Based Scene Flow Recovery using Dense Gradient-based Features (DeGraF)**  
-This project implements a sparse-to-dense optical flow pipeline based on DeGraF feature points, with optional CUDA acceleration, intended for autonomous driving applications.
+This project implements a sparse-to-dense optical flow pipeline based on DeGraF feature points, now leveraging OpenCV’s built-in SparseRLOFOpticalFlow, with optional CUDA acceleration for future GPU support.
 
 > Based on:  
 > 📝 *Stephenson et al., DeGraF-Flow: Extending DeGraF Features for Accurate and Efficient Sparse-to-Dense Optical Flow Estimation (ICIP 2019)*  
@@ -15,83 +15,51 @@ This project implements a sparse-to-dense optical flow pipeline based on DeGraF 
 DEGRAF_FLOW_GPU/
 ├── include/                # Header files
 ├── src/                    # CPU implementation (.cpp)
-├── gpu/                    # GPU modules
-│   ├── cuda/               # CUDA kernel and headers
-│   └── gpu_main.cpp        # GPU test entry
-├── data/                   # (You supply) KITTI-style images + ground truth
-├── external/               # External libraries (see below)
+├── gpu/                    # CUDA modules and main
+├── data/                   # Input images + GT
 ├── CMakeLists.txt          # CMake build config
-├── Dockerfile              # CPU-only dev container
-├── Dockerfile.cuda         # CUDA-enabled dev container
-├── run_dev.sh              # Start CPU container
-├── run_dev_gpu.sh          # Start GPU container
-├── native_build_setup.sh   # One-click build & run on native Linux
+├── native_build_setup.sh   # One-click build
 ```
 
 ---
 
 ## 🚀 Features
 
-- ✅ DeGraF feature point detection (CPU / GPU)
-- ✅ Sparse-to-dense flow: DeGraF + RLOF + EPIC
-- ✅ Flow evaluation on KITTI ground truth
-- ✅ CUDA module pluggable via `ENABLE_CUDA` CMake option
-- ✅ Docker + Native build supported
+- ✅ DeGraF feature point detection (CPU / planned GPU)
+- ✅ Optical flow via OpenCV’s SparseRLOFOpticalFlow
+- ✅ Sparse-to-dense interpolation with EPIC
+- ✅ KITTI-compatible evaluation
+- ✅ Easy native build with OpenCV 4.9
 
 ---
 
-## 🖥️ Build & Run (Native Linux)
+## 🛠️ Build & Run
 
-### 1. Clone the repo and setup external dependency
+### Prerequisites
+
+- OpenCV 4.9 (with `optflow` and `ximgproc` modules)
+- CMake ≥ 3.12
+- GCC / Clang with C++14 support
+
+### 1. Build
 
 ```bash
-git clone https://github.com/yourname/degraf_flow_gpu.git
-cd degraf_flow_gpu
-git clone https://github.com/tsenst/RLOFLib.git external/RLOFLib
-cd external/RLOFLib
 mkdir build && cd build
 cmake ..
-make
+make -j$(nproc)
 ```
 
-> Make sure `libRLOF_64.so` is placed in: `external/RLOFLib/lib/`
-
----
-
-### 2. Build and run (CPU or GPU)
+### 2. Run
 
 ```bash
-chmod +x native_build_setup.sh
-./native_build_setup.sh
+./degraf_flow
 ```
 
-> Modify `native_build_setup.sh` to switch between `gpu_main` and `degraf_flow`
-
----
-
-## 🐳 Build with Docker (Optional)
-
-### CPU-only container
-
-```bash
-docker build -f Dockerfile -t degraf_flow_cpu .
-./run_dev.sh
-```
-
-### GPU-enabled container
-
-```bash
-docker build -f Dockerfile.cuda -t degraf_flow_cuda .
-./run_dev_gpu.sh
-```
-
-> Make sure your host system supports `nvidia-smi` and has NVIDIA Container Toolkit installed.
+Modify `main.cpp` if you wish to change image paths or test sequences.
 
 ---
 
 ## 📂 Data Format
-
-Place images and ground truth in:
 
 ```
 data/
@@ -103,30 +71,31 @@ data/
 ├── outputs/
 ```
 
-You may test with a few KITTI image pairs.
-
 ---
 
-## 📊 Evaluation Output
+## 📊 Output
 
-The program outputs average EPE, R2.0, R3.0, runtime per frame etc., and visualizes flow/GT comparison.
+- Per-frame evaluation (EPE, R2.0, runtime, etc.)
+- Visualized flow + ground truth overlays
+- Output written to `data/outputs/`
 
 ---
 
 ## 📚 References
 
-- I. Katramados & T. Breckon, *DeGraF: Dense Gradient-based Features*, ICIP 2016
+- I. Katramados & T. Breckon, *DeGraF: Dense Gradient-based Features*, ICIP 2016  
 - F. Stephenson et al., *DeGraF-Flow: Sparse-to-Dense Optical Flow Estimation*, ICIP 2019
 
 ---
 
 ## 📃 License
 
-This project is for academic research and educational use only.
+Academic and research use only.
 
 ---
 
 ## 🙋 Author
 
-- 💻 Modified and extended by: *Gang Wang*
+- 💻 Adapted and extended by: *Gang Wang*
 - 🏫 Durham University, 2025
+

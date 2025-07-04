@@ -15,7 +15,7 @@
 #include "opencv2/highgui.hpp"
 #include "opencv2/imgproc.hpp"
 #include "opencv2/features2d.hpp"
-#include "opencv2/xfeatures2d.hpp"
+#include <opencv2/core/types.hpp> 
 
 #include <iostream>
 #include <string>
@@ -27,10 +27,8 @@ using namespace std;
 
 int main(int argc, char **argv)
 {
-
 	////////////////////////// Flow evaluation //////////////////////////
 	// *** Must first specify image file locations in the run_evaluation function in EvaluateOptFlow class ***
-
 	EvaluateOptFlow e = EvaluateOptFlow();
 	int no_of_images = 1; // Number of image pairs to loop though
 
@@ -38,7 +36,7 @@ int main(int argc, char **argv)
 	for (int i = 0; i < no_of_images; i++)
 	{
 		cout << "\nIMAGE 1113#: " << i << "\n\n";
-		e.runEvaluation("degraf_flow_rlof", false, i); // specify flow method here
+		e.runEvaluation("degraf_flow_rlof", true, i); // specify flow method here
 	}
 
 	// Output all stats and averages

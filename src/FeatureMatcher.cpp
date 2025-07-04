@@ -88,29 +88,30 @@ void FeatureMatcher::degraf_flow_LK(InputArray from, InputArray to, OutputArray 
 	else if (point == 2)
 	{
 		vector<KeyPoint> keypoints;
-
-		Ptr<xfeatures2d::SURF> detector = xfeatures2d::SURF::create(0.1, 4, 2);
+		// 在 OpenCV 4.5 中，SIFT 在主命名空间 cv 中，不是 xfeatures2d
+		Ptr<SIFT> detector = SIFT::create(0, 2, 0.01, 10.0, 1.6);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
 	else if (point == 3)
 	{
 		vector<KeyPoint> keypoints;
-		Ptr<xfeatures2d::SIFT> detector = xfeatures2d::SIFT::create(7000, 3, 0.00, 100.0);
+		// 修复：使用 cv::SIFT 而不是 xfeatures2d::SIFT
+		Ptr<SIFT> detector = SIFT::create(7000, 3, 0.00, 100.0);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
 	else if (point == 4)
 	{
 		vector<KeyPoint> keypoints;
-		Ptr<FeatureDetector> detector = ORB::create(5400, 1.2, 8, 20, 0, 2, cv::ORB::HARRIS_SCORE, 20, 20);
+		Ptr<ORB> detector = ORB::create(5400, 1.2f, 8, 20, 0, 2, cv::ORB::HARRIS_SCORE, 20, 20);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
 	else if (point == 5)
 	{
 		vector<KeyPoint> keypoints;
-		Ptr<FeatureDetector> detector = AgastFeatureDetector::create(5, true, cv::AgastFeatureDetector::OAST_9_16);
+		Ptr<AgastFeatureDetector> detector = AgastFeatureDetector::create(5, true, cv::AgastFeatureDetector::OAST_9_16);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
@@ -231,8 +232,7 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 
 	vector<Point2f> points;
 	vector<Point2f> points_intermediate;
-	vector<Point2f> dst_points;
-	vector<unsigned char> status;
+	// vector<unsigned char> status;
 	vector<float> err;
 	int64 timeStart0 = getTickCount();
 	// Compare different feature point inputs DeGraF, FAST, SIFT, SURF, AGAST, ORB, Grid.
@@ -250,9 +250,7 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 		cvSetData(dogIpl, dogMat.data, dogMat.step);
 		std::cout << "About to call cvSetData for image_8u" << std::endl;
 		SaliencyDetector saliency_detector;
-		std::cout << "About to call cvSetData for image_8u 45555" << std::endl;
 		saliency_detector.DoGoS_Saliency(fromIpl, dogIpl, 3, true, true);
-		std::cout << "About to call cvSetData for image_8u 4666" << std::endl;
 		saliency_detector.Release();
 
 		GradientDetector *gradient_detector_1 = new GradientDetector();
@@ -275,25 +273,25 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 	else if (point == 2)
 	{
 		vector<KeyPoint> keypoints;
-
-		Ptr<xfeatures2d::SURF> detector = xfeatures2d::SURF::create(0.1, 4, 2);
+		Ptr<SIFT> detector = SIFT::create(0, 2, 0.01, 10.0, 1.6);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
 	else if (point == 3)
 	{
 		vector<KeyPoint> keypoints;
-		Ptr<FeatureDetector> detector = ORB::create(5400, 1.2, 8, 20, 0, 2, cv::ORB::HARRIS_SCORE, 20, 20);
+		Ptr<ORB> detector = ORB::create(5400, 1.2f, 8, 20, 0, 2, cv::ORB::HARRIS_SCORE, 20, 20);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
 	else if (point == 4)
 	{
 		vector<KeyPoint> keypoints;
-		Ptr<FeatureDetector> detector = AgastFeatureDetector::create(16, true, cv::AgastFeatureDetector::OAST_9_16);
+		Ptr<AgastFeatureDetector> detector = AgastFeatureDetector::create(16, true, cv::AgastFeatureDetector::OAST_9_16);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
+
 	else if (point == 5)
 	{
 		for (int i = 0; i < prev.rows - 6; i = i + 6)
@@ -307,7 +305,8 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 	else if (point == 6)
 	{
 		vector<KeyPoint> keypoints;
-		Ptr<xfeatures2d::SIFT> detector = xfeatures2d::SIFT::create(5400, 3, 0.00, 100.0);
+		// 修复：使用 cv::SIFT 而不是 xfeatures2d::SIFT
+		Ptr<SIFT> detector = SIFT::create(5400, 3, 0.00, 100.0);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
@@ -319,66 +318,79 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 
 	int64 timeStart1 = getTickCount();
 
-	rlof::Image img0, img1;
-	std::vector<rlof::CRPoint> prevPoints, currPoints;
-	img0.attach(prev);
-	img1.attach(cur);
+	// 使用 Mat 替代 rlof::Image
+	Mat img0 = prev;
+	Mat img1 = cur;
 
+	// 保留 prevPoints, currPoints 变量名
+	std::vector<Point2f> prevPoints, currPoints;
 	for (int r = 0; r < points.size(); r++)
 	{
-		prevPoints.push_back(rlof::CRPoint(points[r].x, points[r].y));
+		prevPoints.push_back(Point2f(points[r].x, points[r].y));
 	}
 
-	// Change default RLOF parameters here
-	rlof::Parameter rlof_Parmeter;
-	rlof_Parmeter.m_UseIlluminationModel = true;
-	rlof_Parmeter.m_UseGlobalMotionPrior = true;
-	rlof_Parmeter.m_SmallWinSize = 10;
-	rlof_Parmeter.m_LargeWinSize = 11;
-	rlof_Parmeter.m_MaxLevel = 4;
-	rlof_Parmeter.m_MaxIter = 30;
-	rlof::SparseFlow *proc = rlof::SparseFlow::create(rlof_Parmeter);
+	// 预先初始化输出容器 - 关键修复！
+	currPoints.resize(prevPoints.size()); // 预分配空间
+	std::vector<uchar> status(prevPoints.size()); // 预分配空间
+	std::vector<float> error(prevPoints.size()); // 预分配空间
 
+	// 用指针包装参数结构体
+	cv::Ptr<cv::optflow::RLOFOpticalFlowParameter> rlof_param = 
+		cv::makePtr<cv::optflow::RLOFOpticalFlowParameter>();
+
+	rlof_param->useIlluminationModel = true;
+	rlof_param->useGlobalMotionPrior = true;
+	rlof_param->smallWinSize = 10;
+	rlof_param->largeWinSize = 11;
+	rlof_param->maxLevel = 4;
+	rlof_param->maxIteration = 30;
+	rlof_param->supportRegionType = cv::optflow::SR_FIXED;
+	// 创建 RLOF 光流估计器
+	cv::Ptr<cv::optflow::SparseRLOFOpticalFlow> proc =
+		cv::optflow::SparseRLOFOpticalFlow::create(rlof_param);
+
+	std::cout << "points size: " << points.size() << std::endl;
+	std::cout << "prevPoints size: " << prevPoints.size() << std::endl;
+	std::cout << "currPoints size before calc: " << currPoints.size() << std::endl;
+	// 检查输入图像通道数
+	std::cout << "Input images - prev channels: " << prev_grayscale.channels() 
+			<< ", cur channels: " << cur_grayscale.channels() << std::endl;
 	try
 	{
-		proc->run(img0, img1, prevPoints, currPoints);
+		// 修复：直接传递vector，不使用包装器，使用正确的输入图像
+		proc->calc(prev_grayscale, cur_grayscale, prevPoints, currPoints, status, error);
+		std::cout << "RLOF calculation completed successfully" << std::endl;
 	}
-	catch (std::runtime_error &e)
+	catch (cv::Exception &e)
 	{
-		std::cout << e.what() << std::endl;
+		std::cout << "OpenCV RLOF Error: " << e.what() << std::endl;
+		return; // 如果RLOF失败，直接返回
 	}
 
-	// Clear memory by calling destructor
-	proc->~SparseFlow();
-	// clear points
-	dst_points.clear();
+	// 清理原有的dst_points逻辑，直接使用currPoints
 	dst_points_filtered.clear();
 	points_filtered.clear();
-	dst_points.shrink_to_fit();
-	dst_points_filtered.shrink_to_fit();
+	dst_points_filtered.shrink_to_fit(); 
 	points_filtered.shrink_to_fit();
 
-	// Convert rlof CRPoints back to Point2F
-	for (int r = 0; r < currPoints.size(); r++)
-	{
-		dst_points.push_back(Point2f(currPoints[r].x, currPoints[r].y));
-	}
-
+	// 修复：直接使用currPoints，不需要额外的转换步骤
 	int max_flow_length = 100;
-	for (unsigned int i = 0; i < points.size(); i++)
+	for (unsigned int i = 0; i < points.size() && i < currPoints.size(); i++)
 	{
-
-		if (sqrt(pow(points[i].x - dst_points[i].x, 2) + pow(points[i].y - dst_points[i].y, 2)) < max_flow_length &&
-			dst_points[i].x >= 0 && dst_points[i].x < cur.cols && dst_points[i].y < cur.rows && dst_points[i].y >= 0 &&
+		// 检查状态是否有效
+		if (status[i] && 
+			sqrt(pow(points[i].x - currPoints[i].x, 2) + pow(points[i].y - currPoints[i].y, 2)) < max_flow_length &&
+			currPoints[i].x >= 0 && currPoints[i].x < cur.cols && currPoints[i].y < cur.rows && currPoints[i].y >= 0 &&
 			points[i].x >= 0 && points[i].x < prev.cols && points[i].y < prev.rows && points[i].y >= 0)
 		{
 			points_filtered.push_back(points[i]);
-			dst_points_filtered.push_back(dst_points[i]);
+			dst_points_filtered.push_back(currPoints[i]); 
 		}
 	}
 
 	long double execTime1 = (getTickCount() * 1.0000 - timeStart1) / (getTickFrequency() * 1.0000);
 	std::cout << "Time to run RLOF = " << execTime1 << "\n\n";
+	std::cout << "Filtered points: " << points_filtered.size() << " out of " << points.size() << std::endl;
 
 	////////////////////////////////   Interpolation  //////////////////////////////////////////////////////////////////
 

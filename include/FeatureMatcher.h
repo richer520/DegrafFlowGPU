@@ -11,8 +11,8 @@
 #include "opencv2/videoio.hpp"
 #include "opencv2/highgui.hpp"
 #include "opencv2/imgproc.hpp"
-#include "opencv2/features2d.hpp"
-#include "opencv2/xfeatures2d.hpp"
+#include <opencv2/core/types.hpp> 
+#include <opencv2/features2d.hpp>
 #include "opencv2/calib3d.hpp"
 #include "opencv2/ximgproc/sparse_match_interpolator.hpp"
 #include "opencv2/optflow.hpp"
@@ -24,7 +24,8 @@
 #include <vector>
 
 // N.B need RLOF code from https://github.com/tsenst/RLOFLib
-#include <RLOF_Flow.h>
+// #include <RLOF_Flow.h>
+#include <opencv2/optflow/rlofflow.hpp>
 
 using namespace cv;
 
