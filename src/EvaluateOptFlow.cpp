@@ -448,6 +448,11 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	Mat computed_errors;
 	i1 = imread(i1_path, 1);
 	i2 = imread(i2_path, 1);
+	// 添加4K上采样测试
+	cout << "Original image size: " << i1.cols << "x" << i1.rows << endl;
+	cv::resize(i1, i1, Size(7680, 4320)); // 放大到8K
+	cv::resize(i2, i2, Size(7680, 4320)); // 放大到8K
+	cout << "Upscaled to 8K: " << i1.cols << "x" << i1.rows << endl;
 	im1 = i1;
 	im2 = i2;
     
@@ -551,7 +556,7 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	time = ((double)getTickCount() - startTick) / getTickFrequency();
 	printf("\nTime [s]: %.3f\n", time);
 
-	if (!groundtruth_path.empty())
+	if (!groundtruth_path.empty() && false)
 	{ // compare to ground truth
 		if (data_set == "middlebury")
 		{

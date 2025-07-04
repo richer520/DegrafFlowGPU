@@ -254,11 +254,33 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 		saliency_detector.Release();
 
 		GradientDetector *gradient_detector_1 = new GradientDetector();
-		int status_1 = gradient_detector_1->DetectGradients(dogIpl, 3, 3, 9, 9); // DeGraF params specified here
+		int status_1 = gradient_detector_1->DetectGradients(dogIpl, 3, 3, 3, 3); // DeGraF params specified here
 
 		// Convert from keyPoint type to Point2f
 		cv::KeyPoint::convert(gradient_detector_1->keypoints, points);
 
+		std::cout << "CPU Detection completed successfully!" << std::endl;
+		std::cout << "CPU Keypoints detected: " << points.size() << std::endl;
+		
+		// 限制特征点数量以避免EPIC插值器溢出
+		const int MAX_POINTS = 30000;  // EPIC插值器的安全上限
+		if (points.size() > MAX_POINTS) {
+			std::cout << "Subsampling " << points.size() << " points to " << MAX_POINTS 
+					<< " for EPIC compatibility" << std::endl;
+			
+			// 均匀子采样策略
+			std::vector<cv::Point2f> subsampled_points;
+			subsampled_points.reserve(MAX_POINTS);
+			
+			int step_sample = points.size() / MAX_POINTS;
+			for (size_t i = 0; i < points.size(); i += step_sample) {
+				subsampled_points.push_back(points[i]);
+				if (subsampled_points.size() >= MAX_POINTS) break;
+			}
+			
+			points = subsampled_points;
+			std::cout << "Final points for RLOF: " << points.size() << std::endl;
+		}
 		// Clean up IplImage headers
 		cvReleaseImageHeader(&fromIpl);
 		cvReleaseImageHeader(&dogIpl);
@@ -309,6 +331,100 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 		Ptr<SIFT> detector = SIFT::create(5400, 3, 0.00, 100.0);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
+	}
+	else if (point == 7) {
+		// GPU-accelerated DeGraF detection
+		cv::Size s = from.size();
+		
+		// Convert cv::Mat to IplImage for legacy SaliencyDetector (same as CPU version)
+		Mat fromMat = from.getMat();
+		IplImage *fromIpl = cvCreateImageHeader(cvSize(fromMat.cols, fromMat.rows), IPL_DEPTH_8U, fromMat.channels());
+		cvSetData(fromIpl, fromMat.data, fromMat.step);
+		Mat dogMat = Mat::zeros(s.height, s.width, CV_8UC3);
+		IplImage *dogIpl = cvCreateImageHeader(cvSize(dogMat.cols, dogMat.rows), IPL_DEPTH_8U, dogMat.channels());
+		cvSetData(dogIpl, dogMat.data, dogMat.step);
+		
+		std::cout << "About to call GPU DeGraF saliency detection" << std::endl;
+		
+		// Saliency detection (same as CPU version)
+		SaliencyDetector saliency_detector;
+		saliency_detector.DoGoS_Saliency(fromIpl, dogIpl, 3, true, true);
+		saliency_detector.Release();
+		
+		// Convert IplImage back to cv::Mat for GPU detector
+		cv::Mat saliency_mat = cv::cvarrToMat(dogIpl);
+		
+		std::cout << "Starting GPU DeGraF gradient detection..." << std::endl;
+		auto gpu_start = std::chrono::high_resolution_clock::now();
+		
+		// GPU DeGraF detection
+		CudaGradientDetector *gpu_gradient_detector = new CudaGradientDetector();
+		
+		try {
+			int gpu_status = gpu_gradient_detector->DetectGradients(saliency_mat, 3, 3, 3, 3); // Same DeGraF params
+			
+			auto gpu_end = std::chrono::high_resolution_clock::now();
+			auto gpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(gpu_end - gpu_start);
+			
+			if (gpu_status) {
+				// Convert GPU keypoints to Point2f (same interface as CPU version)
+				cv::KeyPoint::convert(gpu_gradient_detector->GetKeypoints(), points);
+				
+				std::cout << "GPU DeGraF detection completed successfully!" << std::endl;
+				std::cout << "GPU Detection time: " << gpu_duration.count() / 1000.0 << " ms" << std::endl;
+				std::cout << "GPU Keypoints detected: " << points.size() << std::endl;
+				
+				// Optional: GPU memory usage info
+				// size_t total_bytes, gradient_bytes, keypoint_bytes;
+				// gpu_gradient_detector->GetMemoryUsage(total_bytes, gradient_bytes, keypoint_bytes);
+				// std::cout << "GPU Memory used: " << total_bytes / (1024*1024) << " MB" << std::endl;
+
+				// 限制特征点数量以避免EPIC插值器溢出
+				const int MAX_POINTS = 30000;  // EPIC插值器的安全上限
+				if (points.size() > MAX_POINTS) {
+					std::cout << "Subsampling " << points.size() << " points to " << MAX_POINTS 
+							<< " for EPIC compatibility" << std::endl;
+					
+					// 均匀子采样策略
+					std::vector<cv::Point2f> subsampled_points;
+					subsampled_points.reserve(MAX_POINTS);
+					
+					int step_sample = points.size() / MAX_POINTS;
+					for (size_t i = 0; i < points.size(); i += step_sample) {
+						subsampled_points.push_back(points[i]);
+						if (subsampled_points.size() >= MAX_POINTS) break;
+					}
+					
+					points = subsampled_points;
+					std::cout << "Final points for RLOF: " << points.size() << std::endl;
+				}
+				
+			}
+			
+		} catch (const std::exception& e) {
+			std::cerr << "GPU DeGraF exception: " << e.what() << std::endl;
+			std::cerr << "Falling back to CPU version..." << std::endl;
+			
+			// Fallback to CPU version
+			GradientDetector *cpu_gradient_detector = new GradientDetector();
+			int cpu_status = cpu_gradient_detector->DetectGradients(dogIpl, 3, 3, 9, 9);
+			
+			if (cpu_status) {
+				cv::KeyPoint::convert(cpu_gradient_detector->keypoints, points);
+				std::cout << "CPU fallback successful, keypoints: " << points.size() << std::endl;
+			}
+			
+			delete cpu_gradient_detector;
+		}
+		
+		// Clean up GPU detector
+		delete gpu_gradient_detector;
+		
+		// Clean up IplImage headers (same as CPU version)
+		cvReleaseImageHeader(&fromIpl);
+		cvReleaseImageHeader(&dogIpl);
+		
+		std::cout << "GPU DeGraF detection phase completed" << std::endl;
 	}
 
 	long double execTime0 = (getTickCount() * 1.0000 - timeStart0) / (getTickFrequency() * 1.0000);

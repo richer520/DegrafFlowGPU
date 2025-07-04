@@ -6,36 +6,36 @@ set(CMAKE_CUDA_STANDARD 14)
 
 option(ENABLE_CUDA "Enable CUDA support" ON)
 
+# Set OpenCV path
 set(OpenCV_DIR "/home/homeblue01/9/qkwv79/opencv_4.9_clean_cuda/lib/cmake/opencv4")
 find_package(OpenCV REQUIRED)
 
 message(STATUS "OpenCV version: ${OpenCV_VERSION}")
 message(STATUS "OpenCV include dirs: ${OpenCV_INCLUDE_DIRS}")
 
-
+# Include paths
 include_directories(
     ${PROJECT_SOURCE_DIR}/include
-    # ${PROJECT_SOURCE_DIR}/external/RLOFLib/include
     ${PROJECT_SOURCE_DIR}/gpu/cuda
     ${OpenCV_INCLUDE_DIRS}
 )
 
-# link_directories(${PROJECT_SOURCE_DIR}/external/RLOFLib/lib)
-
+# Source files
 file(GLOB SRC_FILES ${PROJECT_SOURCE_DIR}/src/*.cpp)
-file(GLOB GPU_SRC_FILES ${PROJECT_SOURCE_DIR}/gpu/*.cpp ${PROJECT_SOURCE_DIR}/gpu/cuda/*.cu)
+file(GLOB GPU_CU_FILES ${PROJECT_SOURCE_DIR}/gpu/cuda/*.cu)
 
+# Executable
 add_executable(degraf_flow ${SRC_FILES})
-set_property(TARGET degraf_flow PROPERTY CXX_STANDARD 14)
 
-target_link_libraries(degraf_flow
-    ${OpenCV_LIBS}
-    # ${PROJECT_SOURCE_DIR}/external/RLOFLib/build/libRLOF.so
+# Add CUDA files to target
+target_sources(degraf_flow PRIVATE ${GPU_CU_FILES})
+
+# CUDA support for host-device code
+set_target_properties(degraf_flow PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CXX_STANDARD 14
+    CUDA_STANDARD 14
 )
 
-if(ENABLE_CUDA)
-    add_executable(gpu_main ${PROJECT_SOURCE_DIR}/gpu/gpu_main.cpp ${GPU_SRC_FILES})
-    set_property(TARGET gpu_main PROPERTY CXX_STANDARD 14)
-    set_property(TARGET gpu_main PROPERTY CUDA_STANDARD 14)
-    # target_link_libraries(gpu_main ${OpenCV_LIBS} ${PROJECT_SOURCE_DIR}/external/RLOFLib/lib/libRLOF_64.so)
-endif()
+# Link libraries
+target_link_libraries(degraf_flow ${OpenCV_LIBS})

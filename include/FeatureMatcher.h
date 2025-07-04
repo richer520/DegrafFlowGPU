@@ -17,7 +17,7 @@
 #include "opencv2/ximgproc/sparse_match_interpolator.hpp"
 #include "opencv2/optflow.hpp"
 #include "opencv2/core/ocl.hpp"
-
+#include "degraf_detector.h"
 #include <iostream>	 // standard C++ I/O
 #include <string>	 // standard C++ I/O
 #include <algorithm> // includes max()

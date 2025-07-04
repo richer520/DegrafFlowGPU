@@ -1,5 +1,4 @@
 build/
-external/
 .vscode/
 data/
 Dockerfile
