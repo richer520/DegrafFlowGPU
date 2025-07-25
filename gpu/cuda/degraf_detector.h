@@ -36,7 +36,7 @@ private:
     bool init_flag;
     cv::Size image_size, window_size, matrix_size;
     int step_x, step_y;
-
+    void warmupGPU();
 public:
     // Public variables (compatible with original interface)
     std::vector<cv::KeyPoint> keypoints;

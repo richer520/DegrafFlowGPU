@@ -427,9 +427,6 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	String i1_path = "../data/images/000" + num + "_10.png";
 	String i2_path = "../data/images/000" + num + "_11.png";
 	String groundtruth_path = "../data/flow_gt/gt_000" + num + "_10.png";
-	std::cout << "i1_path: " << i1_path << std::endl;
-	std::cout << "i2_path: " << i2_path << std::endl;
-	std::cout << "gt_path: " << groundtruth_path << std::endl;
 
 	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -448,11 +445,6 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	Mat computed_errors;
 	i1 = imread(i1_path, 1);
 	i2 = imread(i2_path, 1);
-	// 添加4K上采样测试
-	cout << "Original image size: " << i1.cols << "x" << i1.rows << endl;
-	cv::resize(i1, i1, Size(7680, 4320)); // 放大到8K
-	cv::resize(i2, i2, Size(7680, 4320)); // 放大到8K
-	cout << "Upscaled to 8K: " << i1.cols << "x" << i1.rows << endl;
 	im1 = i1;
 	im2 = i2;
     
@@ -515,6 +507,12 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	else if (method == "degraf_flow_rlof")
 	{
 	}
+	else if (method == "degraf_flow_cudalk")
+	{
+	}
+	else if (method == "degraf_flow_interponet")
+	{
+	}
 	else
 	{
 		printf("Wrong method!\n");
@@ -548,6 +546,30 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 			points2 = algorithm.dst_points_filtered;
 		}
 	}
+	else if (method == "degraf_flow_cudalk")
+	{
+		FeatureMatcher algorithm = FeatureMatcher();
+		algorithm.degraf_flow_CudaLK(i1, i2, flow, 127, (0.05000000075F), true, (500.0F), (1.5F));
+
+		if (display_images)
+		{
+			// Points for displaying sparse flow field
+			points1 = algorithm.points_filtered;
+			points2 = algorithm.dst_points_filtered;
+		}
+	}
+	else if (method == "degraf_flow_interponet")
+	{
+		FeatureMatcher algorithm = FeatureMatcher();
+		algorithm.degraf_flow_InterpoNet(i1, i2, flow);
+
+		if (display_images)
+		{
+			// Points for displaying sparse flow field
+			points1 = algorithm.points_filtered;
+			points2 = algorithm.dst_points_filtered;
+		}
+	}
 	else
 	{
 		algorithm->calc(i1, i2, flow);
@@ -556,7 +578,7 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	time = ((double)getTickCount() - startTick) / getTickFrequency();
 	printf("\nTime [s]: %.3f\n", time);
 
-	if (!groundtruth_path.empty() && false)
+	if (!groundtruth_path.empty())
 	{ // compare to ground truth
 		if (data_set == "middlebury")
 		{
@@ -656,10 +678,38 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 			imwrite("../data/outputs/06_0.png", i1);
 			imwrite("../data/outputs/06_1.png", i2);
 			// Draw sparse flow field from degraf flow
-			if (method == "degraf_flow_lk" || method == "degraf_flow_rlof")
+			if (method == "degraf_flow_lk" || method == "degraf_flow_rlof" || method == "degraf_flow_cudalk")
 			{
 				Mat sparse = Mat::zeros(i1.rows, i1.cols, CV_8UC3);
 				bitwise_not(sparse, sparse);
+
+				// // 🚀 根据分辨率和点数自适应调整
+				// int line_thickness = max(6, i1.cols / 800);  // 8K下约9-10像素粗
+				// int arrow_tip = max(12, i1.cols / 600);      // 箭头大小
+				
+				// // 根据方法调整显示密度
+				// int max_arrows = 3000;  // 最多显示3000个箭头
+				// int step_size = max(1, (int)points1.size() / max_arrows);
+				
+				// cout << "Drawing " << (points1.size() / step_size) << " arrows with thickness " 
+				// 	<< line_thickness << endl;
+				
+				// for (int i = 0; i < points1.size(); i += step_size)
+				// {
+				// 	// 三版本颜色区分
+				// 	Scalar color;
+				// 	if (method == "degraf_flow_rlof") {
+				// 		color = Scalar(0, 0, 255);        // 🔴 红色 - CPU Baseline
+				// 	} else if (method == "degraf_flow_cudalk") {
+				// 		color = Scalar(0, 255, 0);        // 🟢 绿色 - Mixed GPU
+				// 	} else {
+				// 		color = Scalar(128, 128, 128);    // ⚫ 灰色 - 未知方法
+				// 	}
+					
+				// 	cv::arrowedLine(sparse, points1[i], points2[i], color, 
+				// 				line_thickness, arrow_tip, 0, 0.4);
+				// }
+
 				for (int i = 0; i < points1.size(); i += 4)
 				{
 					cv::arrowedLine(sparse, points1[i], points2[i], cv::Scalar(0, 0, 0), 2, 8, 0, 0.2);

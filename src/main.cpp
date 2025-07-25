@@ -8,6 +8,7 @@
 #include "FeatureMatcher.h"
 #include "SaliencyDetector.h"
 #include "EvaluateOptFlow.h"
+#include "EvaluateSceneFlow.h"
 #include "vo_features.h"
 
 // OpenCV - requires contrib modules
@@ -15,7 +16,7 @@
 #include "opencv2/highgui.hpp"
 #include "opencv2/imgproc.hpp"
 #include "opencv2/features2d.hpp"
-#include <opencv2/core/types.hpp> 
+// #include "opencv2/xfeatures2d.hpp"
 
 #include <iostream>
 #include <string>
@@ -27,8 +28,14 @@ using namespace std;
 
 int main(int argc, char **argv)
 {
+
+	// 预先初始化单例，摊销初始化成本
+    std::cout << "Pre-initializing GPU resources..." << std::endl;
+    FeatureMatcher::getGPUDetector();  // 触发初始化
+    FeatureMatcher::getCudaTracker();  // 触发初始化
 	////////////////////////// Flow evaluation //////////////////////////
 	// *** Must first specify image file locations in the run_evaluation function in EvaluateOptFlow class ***
+
 	EvaluateOptFlow e = EvaluateOptFlow();
 	int no_of_images = 1; // Number of image pairs to loop though
 
@@ -36,7 +43,7 @@ int main(int argc, char **argv)
 	for (int i = 0; i < no_of_images; i++)
 	{
 		cout << "\nIMAGE 1113#: " << i << "\n\n";
-		e.runEvaluation("degraf_flow_rlof", true, i); // specify flow method here
+		e.runEvaluation("degraf_flow_interponet", false, i); // specify flow method here
 	}
 
 	// Output all stats and averages
@@ -72,12 +79,43 @@ int main(int argc, char **argv)
 	cout << "Average STD: " << std / no_of_images << "\n\n";
 	cout << "--------------------------------------------";
 
+	////////////////////////// 3D Scene Flow evaluation //////////////////////////
+	// 配置参数
+	// std::string method = "degraf_flow_cudalk"; // 你要评估的光流方法
+	// bool display_images = true;				 // 是否显示主观可视化（方向/热图/拼接大图）
+	// int start_image = 0;					 // 起始图像编号
+	// int no_of_images_scene = 1;					 // 要评估的帧数，可改成全部
+
+	// // 实例化评估器
+	// EvaluateSceneFlow evaluator;
+
+	// // 批量评估循环
+	// for (int i = start_image; i < start_image + no_of_images_scene; ++i)
+	// {
+	// 	std::cout << "\nEvaluating SCENEFLOW on image: " << i << " ..." << std::endl;
+	// 	int code = evaluator.runEvaluation(method, display_images, i);
+	// 	if (code != 0)
+	// 		std::cout << "Failed to process image " << i << "!" << std::endl;
+	// }
+
+	// // 输出/统计
+	// std::cout << "\n---------------- Scene Flow Evaluation Stats ----------------" << std::endl;
+	// for (size_t j = 0; j < evaluator.all_stats.size(); ++j)
+	// {
+	// 	std::cout << "Image: " << j << " | ";
+	// 	for (size_t k = 0; k < evaluator.all_stats[j].size(); ++k)
+	// 		std::cout << evaluator.all_stats[j][k] << " ";
+	// 	std::cout << std::endl;
+	// }
+	// // 可按需做平均指标输出
+
+	// std::cout << "---------------- Scene Flow evaluation End ----------------\n";
 	/////////////////////////////////////////////////////////////////////////
 
 	/////////////////    Odometry   ////////////////////////
 	// Ensure all VO data file locations are specified in the Odometry class
-	Odometry vo = Odometry();
-	vo.run();
+	// Odometry vo = Odometry();
+	// vo.run();
 	///////////////////////////////////////////////////////
 
 	//////////////// SAMPLE VIDEO ///////////////////
