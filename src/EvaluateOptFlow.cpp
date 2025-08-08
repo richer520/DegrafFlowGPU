@@ -396,17 +396,17 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	String data_set = "kitti"; // or "middlebury";
 
 	// Convert image_num into string
-	String num = to_string(image_no);
-	if (image_no < 10)
-	{
-		num = "00" + num;
-	}
-	else if (image_no < 100)
-	{
-		num = "0" + num;
-	}
+	// String num = to_string(image_no);
+	// if (image_no < 10)
+	// {
+	// 	num = "00" + num;
+	// }
+	// else if (image_no < 100)
+	// {
+	// 	num = "0" + num;
+	// }
 
-	num = "006"; // set to evaluate just a single image pair
+	// num = "006"; // set to evaluate just a single image pair
 
 	// Middlebury Image names
 	vector<String> image_names = {{"Venus"}, {"RubberWhale"}, {"Grove2"}, {"Grove3"}, {"Urban2"}, {"Urban3"}, {"Hydrangea"}};
@@ -424,9 +424,13 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	String groundtruth_path = "C:/Users/felix/OneDrive/Documents/Uni/Year 4/project/evaluation/data_scene_flow/training/flow_noc/000" + num + "_10.png";*/
 
 	//// KITTI 2012 train (indexed by image_num)
-	String i1_path = "../data/images/000" + num + "_10.png";
-	String i2_path = "../data/images/000" + num + "_11.png";
-	String groundtruth_path = "../data/flow_gt/gt_000" + num + "_10.png";
+	char num[7];
+    sprintf(num, "%06d", image_no);
+    std::string num_str(num);
+	std::string base_dir = "../data/data_stereo_flow/training/";
+	String i1_path = base_dir + "image_0/" + num_str + "_10.png";
+	String i2_path = base_dir + "image_0/" + num_str + "_11.png";
+	String groundtruth_path = base_dir + "flow_noc/" + num_str + "_10.png";
 
 	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -525,7 +529,7 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	if (method == "degraf_flow_lk")
 	{
 		FeatureMatcher algorithm = FeatureMatcher();
-		algorithm.degraf_flow_LK(i1, i2, flow, 60, (0.05000000075F), true, (500.0F), (1.5F));
+		algorithm.degraf_flow_LK(i1, i2, flow, 60, (0.05000000075F), true, (500.0F), (1.5F),num_str);
 
 		if (display_images)
 		{
@@ -537,7 +541,7 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	else if (method == "degraf_flow_rlof")
 	{
 		FeatureMatcher algorithm = FeatureMatcher();
-		algorithm.degraf_flow_RLOF(i1, i2, flow, 127, (0.05000000075F), true, (500.0F), (1.5F));
+		algorithm.degraf_flow_RLOF(i1, i2, flow, 127, (0.05000000075F), true, (500.0F), (1.5F),num_str);
 		
 		if (display_images)
 		{
@@ -549,7 +553,7 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	else if (method == "degraf_flow_cudalk")
 	{
 		FeatureMatcher algorithm = FeatureMatcher();
-		algorithm.degraf_flow_CudaLK(i1, i2, flow, 127, (0.05000000075F), true, (500.0F), (1.5F));
+		algorithm.degraf_flow_CudaLK(i1, i2, flow, 127, (0.05000000075F), true, (500.0F), (1.5F),num_str);
 
 		if (display_images)
 		{
@@ -561,7 +565,7 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 	else if (method == "degraf_flow_interponet")
 	{
 		FeatureMatcher algorithm = FeatureMatcher();
-		algorithm.degraf_flow_InterpoNet(i1, i2, flow);
+		algorithm.degraf_flow_InterpoNet(i1, i2, flow,num_str);
 
 		if (display_images)
 		{
@@ -589,6 +593,10 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 			ground_truth = readKittiGroundTruth(groundtruth_path); // KITTI
 		}
 
+		std::cout << "Flow size: " << flow.size() << std::endl;
+		std::cout << "GT size: " << ground_truth.size() << std::endl;
+		std::cout << "Flow channels: " << flow.channels() << std::endl;
+		std::cout << "GT channels: " << ground_truth.channels() << std::endl;
 		if (flow.size() != ground_truth.size() || flow.channels() != 2 || ground_truth.channels() != 2)
 		{
 			printf("Dimension mismatch between the computed flow and the provided ground truth\n");
@@ -678,7 +686,7 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
 			imwrite("../data/outputs/06_0.png", i1);
 			imwrite("../data/outputs/06_1.png", i2);
 			// Draw sparse flow field from degraf flow
-			if (method == "degraf_flow_lk" || method == "degraf_flow_rlof" || method == "degraf_flow_cudalk")
+			if (method == "degraf_flow_lk" || method == "degraf_flow_rlof" || method == "degraf_flow_cudalk" || method == "degraf_flow_interponet" )
 			{
 				Mat sparse = Mat::zeros(i1.rows, i1.cols, CV_8UC3);
 				bitwise_not(sparse, sparse);

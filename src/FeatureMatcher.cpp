@@ -8,7 +8,10 @@
 #include "FeatureMatcher.h"
 #include <cuda_runtime.h>  // ✅ 确保包含CUDA运行时API
 #include <chrono>          // ✅ 确保包含时间测量
-
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <json/json.h>  // 需要安装libjsoncpp-dev
 
 // 保存匹配点为 InterpoNet 输入格式
 void save_matches(const std::vector<cv::Point2f>& src_pts, const std::vector<cv::Point2f>& dst_pts, const std::string& filename) {
@@ -21,10 +24,312 @@ void save_matches(const std::vector<cv::Point2f>& src_pts, const std::vector<cv:
 }
 
 // 保存边缘图为 .dat 文件
+// void save_edge_dat(const cv::Mat& edge_map, const std::string& filename) {
+//     std::ofstream ofs(filename, std::ios::binary);
+//     ofs.write(reinterpret_cast<const char*>(edge_map.data), edge_map.total());
+//     ofs.close();
+// }
+
 void save_edge_dat(const cv::Mat& edge_map, const std::string& filename) {
+    // 1. 转成 float32
+    cv::Mat edge_float;
+    if (edge_map.type() != CV_32F)
+        edge_map.convertTo(edge_float, CV_32F);
+    else
+        edge_float = edge_map;
+
+    // 2. 强制转为单通道灰度图
+    if (edge_float.channels() > 1)
+        cv::cvtColor(edge_float, edge_float, cv::COLOR_BGR2GRAY);
+
+    // 3. 检查维度
+    std::cout << "[DEBUG] edge_float shape: " << edge_float.rows << "x" << edge_float.cols 
+              << ", channels: " << edge_float.channels() << std::endl;
+
+    // 4. 写入 binary 文件
     std::ofstream ofs(filename, std::ios::binary);
-    ofs.write(reinterpret_cast<const char*>(edge_map.data), edge_map.total());
+    ofs.write(reinterpret_cast<const char*>(edge_float.data),
+              edge_float.rows * edge_float.cols * sizeof(float));
     ofs.close();
+
+    std::cout << "[DEBUG] Saved edge.dat: " << edge_float.rows << "x" << edge_float.cols
+              << " = " << edge_float.total() << " floats" << std::endl;
+}
+
+
+// ===== 调试检查函数 =====
+void debug_image_preprocessing(const cv::Mat& prev, const cv::Mat& cur) {
+    std::cout << "[DEBUG] Image preprocessing check:" << std::endl;
+    std::cout << "  prev type: " << prev.type() << " (CV_8UC3=" << CV_8UC3 << ")" << std::endl;
+    std::cout << "  prev channels: " << prev.channels() << std::endl;
+    std::cout << "  prev size: " << prev.size() << std::endl;
+    
+    std::cout << "  cur type: " << cur.type() << std::endl;
+    std::cout << "  cur channels: " << cur.channels() << std::endl;
+    std::cout << "  cur size: " << cur.size() << std::endl;
+    
+    // 检查像素值范围
+    cv::Scalar mean_prev, mean_cur;
+    mean_prev = cv::mean(prev);
+    mean_cur = cv::mean(cur);
+    std::cout << "  prev mean BGR: (" << mean_prev[0] << "," << mean_prev[1] << "," << mean_prev[2] << ")" << std::endl;
+    std::cout << "  cur mean BGR: (" << mean_cur[0] << "," << mean_cur[1] << "," << mean_cur[2] << ")" << std::endl;
+}
+
+void check_coordinate_system(const cv::Mat& img1, const cv::Mat& img2, 
+                           const std::vector<cv::Point2f>& src_pts, 
+                           const std::vector<cv::Point2f>& dst_pts) {
+    
+    cv::Mat vis1 = img1.clone();
+    cv::Mat vis2 = img2.clone();
+    
+    // 在前几个点上画圈，检查是否对应
+    for (int i = 0; i < std::min(10, (int)src_pts.size()); ++i) {
+        cv::circle(vis1, src_pts[i], 5, cv::Scalar(0, 255, 0), 2);
+        cv::circle(vis2, dst_pts[i], 5, cv::Scalar(0, 0, 255), 2);
+        
+        std::cout << "Point " << i << ": (" << src_pts[i].x << "," << src_pts[i].y 
+                  << ") -> (" << dst_pts[i].x << "," << dst_pts[i].y << ")" << std::endl;
+    }
+    
+    cv::imwrite("debug_frame1_points.png", vis1);
+    cv::imwrite("debug_frame2_points.png", vis2);
+}
+
+
+void check_edge_statistics(const cv::Mat& edges) {
+    cv::Scalar mean, stddev;
+    cv::meanStdDev(edges, mean, stddev);
+    
+    double min_val, max_val;
+    cv::minMaxLoc(edges, &min_val, &max_val);
+    
+    std::cout << "[DEBUG] Edge map statistics:" << std::endl;
+    std::cout << "  Range: [" << min_val << ", " << max_val << "]" << std::endl;
+    std::cout << "  Mean: " << mean[0] << std::endl;
+    std::cout << "  Std: " << stddev[0] << std::endl;
+    std::cout << "  Type: " << edges.type() << " (should be CV_32F = " << CV_32F << ")" << std::endl;
+}
+
+void test_flow_direction() {
+    std::vector<cv::Point2f> src_pts = {
+        cv::Point2f(100, 100),  // 向右移动
+        cv::Point2f(200, 200),  // 向下移动
+        cv::Point2f(300, 300)   // 对角移动
+    };
+    
+    std::vector<cv::Point2f> dst_pts = {
+        cv::Point2f(110, 100),  // 向右10像素
+        cv::Point2f(200, 210),  // 向下10像素  
+        cv::Point2f(310, 310)   // 对角10像素
+    };
+    
+    std::cout << "[DEBUG] Test flow directions:" << std::endl;
+    for (size_t i = 0; i < src_pts.size(); ++i) {
+        float dx = dst_pts[i].x - src_pts[i].x;
+        float dy = dst_pts[i].y - src_pts[i].y;
+        std::cout << "Point " << i << ": dx=" << dx << ", dy=" << dy << std::endl;
+    }
+}
+
+// Replacement for cv::optflow::readOpticalFlow - reads .flo files
+static Mat readOpticalFlowFile(const String &path)
+{
+	std::ifstream file(path.c_str(), std::ios_base::binary);
+	if (!file.good())
+	{
+		printf("Error opening flow file: %s\n", path.c_str());
+		return Mat();
+	}
+
+	float magic;
+	file.read((char *)&magic, sizeof(float));
+	if (magic != 202021.25f) // .flo file magic number
+	{
+		printf("Invalid .flo file magic number\n");
+		return Mat();
+	}
+
+	int width, height;
+	file.read((char *)&width, sizeof(int));
+	file.read((char *)&height, sizeof(int));
+
+	Mat flow(height, width, CV_32FC2);
+	file.read((char *)flow.data, width * height * 2 * sizeof(float));
+	file.close();
+
+	return flow;
+}
+
+
+// 保存特征点为RAFT格式的txt文件
+void savePointsToFile(const std::vector<cv::Point2f>& points, const std::string& filepath) {
+    std::ofstream file(filepath);
+    if (file.is_open()) {
+        for (const auto& point : points) {
+            file << point.x << " " << point.y << "\n";
+        }
+        file.close();
+        std::cout << "[DEBUG] Saved " << points.size() << " points to: " << filepath << std::endl;
+    } else {
+        std::cerr << "[ERROR] Failed to open file for writing: " << filepath << std::endl;
+    }
+}
+
+bool FeatureMatcher::callRAFTTCP(const std::string& image1_path,
+	const std::string& image2_path,
+	const std::string& points_path,
+	const std::string& output_path) {
+
+	// 创建socket
+	int sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (sock < 0) {
+		std::cerr << "Socket creation failed for RAFT" << std::endl;
+		return false;
+	}
+
+	// 服务器地址
+	struct sockaddr_in server_addr;
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_port = htons(9998);  // RAFT使用9998端口
+	inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr);
+
+	// 连接服务器
+	if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+		std::cerr << "RAFT TCP connection failed" << std::endl;
+		close(sock);
+		return false;
+	}
+
+	// 构建JSON请求
+	Json::Value request;
+	request["image1_path"] = image1_path;
+	request["image2_path"] = image2_path;
+	request["points_path"] = points_path;
+	request["output_path"] = output_path;
+
+	Json::StreamWriterBuilder builder;
+	std::string request_str = Json::writeString(builder, request) + "\n";  // 添加换行符
+
+	// 发送请求
+	send(sock, request_str.c_str(), request_str.length(), 0);
+
+	// 接收响应
+	std::string response_str;
+	char buffer[1024];
+	int bytes_received;
+
+	while ((bytes_received = recv(sock, buffer, sizeof(buffer), 0)) > 0) {
+		response_str.append(buffer, bytes_received);
+		if (!response_str.empty() && response_str.back() == '\n') break;  // 接收到完整JSON
+	}
+
+	close(sock);
+
+	if (bytes_received <= 0) {
+		std::cerr << "Failed to receive RAFT response" << std::endl;
+		return false;
+	}
+
+	// 解析响应
+	Json::Value response;
+	Json::CharReaderBuilder reader_builder;
+	std::istringstream response_stream(response_str);
+	std::string parse_errors;
+
+	if (!Json::parseFromStream(reader_builder, response_stream, &response, &parse_errors)) {
+		std::cerr << "Failed to parse RAFT response: " << parse_errors << std::endl;
+		return false;
+	}
+
+	if (response["status"].asString() == "success") {
+		std::cout << "[INFO] RAFT TCP: " << response["message"].asString() << std::endl;
+		return true;
+	} else {
+		std::cerr << "[ERROR] RAFT TCP: " << response["message"].asString() << std::endl;
+		return false;
+	}
+}
+
+// 添加TCP客户端调用函数
+bool FeatureMatcher::callInterpoNetTCP(const std::string& img1_path, 
+	const std::string& img2_path,
+	const std::string& edges_path, 
+	const std::string& matches_path,
+	const std::string& output_path) {
+
+	// 创建socket
+	int sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (sock < 0) {
+		std::cerr << "Socket creation failed" << std::endl;
+		return false;
+	}
+
+	// 服务器地址
+	struct sockaddr_in server_addr;
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_port = htons(9999);
+	inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr);
+
+	// 连接服务器
+	if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+		std::cerr << "Connection failed" << std::endl;
+		close(sock);
+		return false;
+	}
+
+	// 构建JSON请求
+	Json::Value request;
+	request["img1_path"] = img1_path;
+	request["img2_path"] = img2_path;
+	request["edges_path"] = edges_path;
+	request["matches_path"] = matches_path;
+	request["output_path"] = output_path;
+
+	Json::StreamWriterBuilder builder;
+	std::string request_str = Json::writeString(builder, request);
+
+	// 发送请求
+	send(sock, request_str.c_str(), request_str.length(), 0);
+
+	// 接收响应
+	// char buffer[4096] = {0};
+	// int bytes_received = recv(sock, buffer, 4096, 0);
+
+	std::string response_str;
+	char buffer[1024];
+	int bytes_received;
+
+	while ((bytes_received = recv(sock, buffer, sizeof(buffer), 0)) > 0) {
+		response_str.append(buffer, bytes_received);
+		if (!response_str.empty() && response_str.back() == '\n') break;  // 接收到完整JSON
+	}
+
+	close(sock);
+
+	if (bytes_received <= 0) {
+		std::cerr << "Failed to receive response" << std::endl;
+		return false;
+	}
+
+	// 解析响应
+	Json::Value response;
+	Json::CharReaderBuilder reader_builder;
+	std::istringstream response_stream(response_str);
+	std::string parse_errors;
+
+	if (!Json::parseFromStream(reader_builder, response_stream, &response, &parse_errors)) {
+		std::cerr << "Failed to parse response: " << parse_errors << std::endl;
+		return false;
+	}
+
+	if (response["status"].asString() == "success") {
+		std::cout << "[INFO] InterpoNet TCP: " << response["message"].asString() << std::endl;
+		return true;
+	} else {
+		std::cerr << "[ERROR] InterpoNet TCP: " << response["message"].asString() << std::endl;
+		return false;
+	}
 }
 
 // ✅ 静态成员初始化
@@ -69,7 +374,7 @@ cv::Ptr<cv::cuda::SparsePyrLKOpticalFlow> FeatureMatcher::getCudaTracker() {
         shared_cuda_tracker = cv::cuda::SparsePyrLKOpticalFlow::create();
         
         // 设置参数 (与原来一致)
-        shared_cuda_tracker->setWinSize(cv::Size(21, 21));
+        shared_cuda_tracker->setWinSize(cv::Size(10, 11));
         shared_cuda_tracker->setMaxLevel(4);
         shared_cuda_tracker->setNumIters(30);
         shared_cuda_tracker->setUseInitialFlow(false);
@@ -148,7 +453,7 @@ void FeatureMatcher::cleanup() {
 \param sigma, use_post_proc, fgs_lambda, fgs_sigma EdgeAwareInterpolator params defined in openCV documentation
 */
 
-void FeatureMatcher::degraf_flow_LK(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma)
+void FeatureMatcher::degraf_flow_LK(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma,String num_str)
 {
 	CV_Assert(k > 3 && sigma > 0.0001f && fgs_lambda > 1.0f && fgs_sigma > 0.01f);
 	CV_Assert(!from.empty() && from.depth() == CV_8U && (from.channels() == 3 || from.channels() == 1));
@@ -336,7 +641,7 @@ void FeatureMatcher::degraf_flow_LK(InputArray from, InputArray to, OutputArray 
 \param k number of support vectors used by the interpolator
 \param sigma, use_post_proc, fgs_lambda, fgs_sigma EdgeAwareInterpolator params defined in openCV documentation
 */
-void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma)
+void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma,String num_str)
 {
 	CV_Assert(k > 3 && sigma > 0.0001f && fgs_lambda > 1.0f && fgs_sigma > 0.01f);
 	CV_Assert(!from.empty() && from.depth() == CV_8U && (from.channels() == 3 || from.channels() == 1));
@@ -671,7 +976,7 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 \param k number of support vectors used by the interpolator
 \param sigma, use_post_proc, fgs_lambda, fgs_sigma EdgeAwareInterpolator params defined in openCV documentation
 */
-void FeatureMatcher::degraf_flow_CudaLK(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma)
+void FeatureMatcher::degraf_flow_CudaLK(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma,String num_str)
 {
 	CV_Assert(k > 3 && sigma > 0.0001f && fgs_lambda > 1.0f && fgs_sigma > 0.01f);
 	CV_Assert(!from.empty() && from.depth() == CV_8U && (from.channels() == 3 || from.channels() == 1));
@@ -927,7 +1232,7 @@ void FeatureMatcher::degraf_flow_CudaLK(InputArray from, InputArray to, OutputAr
 		// ✅ 关键修改：使用单例CUDA追踪器
         auto cuda_tracker = getCudaTracker();
 		// 设置参数 (对应 RLOF 的参数)
-		cuda_tracker->setWinSize(cv::Size(21, 21));  // 对应 RLOF 的窗口大小
+		cuda_tracker->setWinSize(cv::Size(10, 11));  // 对应 RLOF 的窗口大小
 		cuda_tracker->setMaxLevel(4);                // 对应 maxLevel
 		cuda_tracker->setNumIters(30);              // 对应 maxIteration
 		cuda_tracker->setUseInitialFlow(false);     // 不使用初始光流
@@ -1018,8 +1323,13 @@ void FeatureMatcher::degraf_flow_CudaLK(InputArray from, InputArray to, OutputAr
 }
 
 
-void FeatureMatcher::degraf_flow_InterpoNet(InputArray from, InputArray to, OutputArray flow)
+void FeatureMatcher::degraf_flow_InterpoNet(InputArray from, InputArray to, OutputArray flow,String num_str)
 {
+	// ✅ 添加这行调试输出
+    std::cout << "[DEBUG] degraf_flow_InterpoNet called for: " << num_str << std::endl;
+	// ✅ 总体计时开始
+	auto total_start = std::chrono::high_resolution_clock::now();
+
 	CV_Assert(!from.empty() && from.depth() == CV_8U && (from.channels() == 3 || from.channels() == 1));
 	CV_Assert(!to.empty() && to.depth() == CV_8U && (to.channels() == 3 || to.channels() == 1));
 
@@ -1043,6 +1353,8 @@ void FeatureMatcher::degraf_flow_InterpoNet(InputArray from, InputArray to, Outp
 	// vector<unsigned char> status;
 	vector<float> err;
 	int64 timeStart0 = getTickCount();
+	// ✅ 1. DeGraF + RLOF 计时
+    auto degraf_start = std::chrono::high_resolution_clock::now();
 	// Compare different feature point inputs DeGraF, FAST, SIFT, SURF, AGAST, ORB, Grid.
 	int point = 0;
 	if (point == 0)
@@ -1238,144 +1550,176 @@ void FeatureMatcher::degraf_flow_InterpoNet(InputArray from, InputArray to, Outp
 	long double execTime0 = (getTickCount() * 1.0000 - timeStart0) / (getTickFrequency() * 1.0000);
 	std::cout << "Time to compute DeGraF points = " << execTime0 << "\n\n";
 
-	//////////////////////////////// RLOF ////////////////////////////////////////////////////////////////
+	//////////////////////////////// RAFT(TCP --port 9998 Docker) ////////////////////////////////////////////////////////////////
 
-	int64 timeStart1 = getTickCount();
+	/////////////////////////////////////// RAFT输入准备 ///////////////////////////////////////
 
-	// 使用 Mat 替代 rlof::Image
-	Mat img0 = prev;
-	Mat img1 = cur;
+	// ✅ 1. 创建RAFT输入文件夹
+	auto raft_prep_start = std::chrono::high_resolution_clock::now();
 
-	// 保留 prevPoints, currPoints 变量名
-	std::vector<Point2f> prevPoints, currPoints;
-	for (int r = 0; r < points.size(); r++)
-	{
-		prevPoints.push_back(Point2f(points[r].x, points[r].y));
+	// 创建文件夹
+	std::string raft_base_path = "../external/RAFT/data/degraf_input/";
+	std::string raft_images_folder = raft_base_path + "degraf_images/";
+	std::string raft_points_folder = raft_base_path + "degraf_points/";
+
+	cv::utils::fs::createDirectories(raft_images_folder);
+	cv::utils::fs::createDirectories(raft_points_folder);
+
+	std::cout << "[DEBUG] Created RAFT input folders" << std::endl;
+
+	// ✅ 2. 保存图像到RAFT目录
+	cv::imwrite(raft_images_folder + num_str + "_10.png", prev);
+	cv::imwrite(raft_images_folder + num_str + "_11.png", cur);
+
+	// ✅ 3. 保存特征点到RAFT目录（本地路径）
+	std::string points_path_local = raft_points_folder + num_str + "_points.txt";
+	savePointsToFile(points, points_path_local);
+
+	auto raft_prep_end = std::chrono::high_resolution_clock::now();
+	auto raft_prep_duration = std::chrono::duration_cast<std::chrono::milliseconds>(raft_prep_end - raft_prep_start);
+	std::cout << "[TIMING] RAFT input preparation: " << raft_prep_duration.count() << " ms" << std::endl;
+
+	/////////////////////////////////////// 调用RAFT TCP ///////////////////////////////////////
+
+	// ✅ 4. 准备RAFT TCP调用路径（容器内路径）
+	std::string raft_img1_path = "/app/data/degraf_input/degraf_images/" + num_str + "_10.png";
+	std::string raft_img2_path = "/app/data/degraf_input/degraf_images/" + num_str + "_11.png";
+	std::string raft_points_path = "/app/data/degraf_input/degraf_points/" + num_str + "_points.txt";
+	std::string raft_matches_path = "/app/data/raft_matches/" + num_str + "_matches.txt";
+
+	// ✅ 5. 调用RAFT TCP获取稀疏匹配
+	auto raft_tcp_start = std::chrono::high_resolution_clock::now();
+
+	bool raft_success = callRAFTTCP(raft_img1_path, 
+									raft_img2_path,
+									raft_points_path,
+									raft_matches_path);
+
+	auto raft_tcp_end = std::chrono::high_resolution_clock::now();
+	auto raft_tcp_duration = std::chrono::duration_cast<std::chrono::milliseconds>(raft_tcp_end - raft_tcp_start);
+	std::cout << "[TIMING] RAFT TCP inference: " << raft_tcp_duration.count() << " ms" << std::endl;
+
+	if (!raft_success) {
+		std::cerr << "❌ RAFT TCP调用失败: " << num_str << std::endl;
+		return;
 	}
 
-	// 预先初始化输出容器 - 关键修复！
-	currPoints.resize(prevPoints.size()); // 预分配空间
-	std::vector<uchar> status(prevPoints.size()); // 预分配空间
-	std::vector<float> error(prevPoints.size()); // 预分配空间
+	//////////////////////////////// InterpoNet (TCP --port 9999 Docker) ////////////////////////////////////////////////////////////////
 
-	// 用指针包装参数结构体
-	cv::Ptr<cv::optflow::RLOFOpticalFlowParameter> rlof_param = 
-		cv::makePtr<cv::optflow::RLOFOpticalFlowParameter>();
+	// 创建文件夹
+	std::string base_path_external = "../external/InterpoNet/data/interponet_input/";
+	// std::string input_folder_local = base_path_external + "interponet_input_" + num_str + "/";
+	cv::utils::fs::createDirectories(base_path_external);
 
-	rlof_param->useIlluminationModel = true;
-	rlof_param->useGlobalMotionPrior = true;
-	rlof_param->smallWinSize = 10;
-	rlof_param->largeWinSize = 11;
-	rlof_param->maxLevel = 4;
-	rlof_param->maxIteration = 30;
-	rlof_param->supportRegionType = cv::optflow::SR_FIXED;
-	// 创建 RLOF 光流估计器
-	cv::Ptr<cv::optflow::SparseRLOFOpticalFlow> proc =
-		cv::optflow::SparseRLOFOpticalFlow::create(rlof_param);
+	// ✅ 在这里添加图像预处理检查
+    // debug_image_preprocessing(prev, cur);
 
-	std::cout << "points size: " << points.size() << std::endl;
-	std::cout << "prevPoints size: " << prevPoints.size() << std::endl;
-	std::cout << "currPoints size before calc: " << currPoints.size() << std::endl;
-	// 检查输入图像通道数
-	std::cout << "Input images - prev channels: " << prev_grayscale.channels() 
-			<< ", cur channels: " << cur_grayscale.channels() << std::endl;
-	try
-	{
-		// 修复：直接传递vector，不使用包装器，使用正确的输入图像
-		proc->calc(prev_grayscale, cur_grayscale, prevPoints, currPoints, status, error);
-		std::cout << "RLOF calculation completed successfully" << std::endl;
-	}
-	catch (cv::Exception &e)
-	{
-		std::cout << "OpenCV RLOF Error: " << e.what() << std::endl;
-		return; // 如果RLOF失败，直接返回
-	}
+	// // 保存图像
+	// cv::imwrite(input_folder_local + num_str + "_10.png", prev);
+	// cv::imwrite(input_folder_local + num_str + "_11.png", cur);
 
-	// 清理原有的dst_points逻辑，直接使用currPoints
-	dst_points_filtered.clear();
-	points_filtered.clear();
-	dst_points_filtered.shrink_to_fit(); 
-	points_filtered.shrink_to_fit();
+	// ✅ 3. 边缘检测计时
+    auto edge_start = std::chrono::high_resolution_clock::now();
 
-	// 修复：直接使用currPoints，不需要额外的转换步骤
-	int max_flow_length = 100;
-	for (unsigned int i = 0; i < points.size() && i < currPoints.size(); i++)
-	{
-		// 检查状态是否有效
-		if (status[i] && 
-			sqrt(pow(points[i].x - currPoints[i].x, 2) + pow(points[i].y - currPoints[i].y, 2)) < max_flow_length &&
-			currPoints[i].x >= 0 && currPoints[i].x < cur.cols && currPoints[i].y < cur.rows && currPoints[i].y >= 0 &&
-			points[i].x >= 0 && points[i].x < prev.cols && points[i].y < prev.rows && points[i].y >= 0)
-		{
-			points_filtered.push_back(points[i]);
-			dst_points_filtered.push_back(currPoints[i]); 
-		}
-	}
-
-	long double execTime1 = (getTickCount() * 1.0000 - timeStart1) / (getTickFrequency() * 1.0000);
-	std::cout << "Time to run RLOF = " << execTime1 << "\n\n";
-	std::cout << "Filtered points: " << points_filtered.size() << " out of " << points.size() << std::endl;
-
-	// 保存匹配点
-	save_matches(points_filtered, dst_points_filtered, "../external/interponet_tf/InterpoNet/inputs/temp_matches.txt");
-
+	// 写入边缘图
 	cv::Ptr<cv::ximgproc::StructuredEdgeDetection> sed =
-    cv::ximgproc::createStructuredEdgeDetection("../external/interponet_tf/InterpoNet/inputs/model.yml");
+		cv::ximgproc::createStructuredEdgeDetection("../external/InterpoNet/model.yml");
 
 	cv::Mat imgFloat, edges;
 	prev.convertTo(imgFloat, CV_32FC3, 1.0f / 255.0f);
 	sed->detectEdges(imgFloat, edges);
-	cv::imwrite("../external/interponet_tf/InterpoNet/inputs/test_edges.png", edges * 255);
+	// cv::imwrite(base_path_external + num_str + "_edges.png", edges * 255);
+
+	// ✅ 在这里添加边缘图检查
+    check_edge_statistics(edges);
+
+	// 写入 edges.dat
+	std::string edges_dat_path_local = base_path_external + num_str + "_edges.dat";
+	save_edge_dat(edges, edges_dat_path_local);
 
 
-	save_edge_dat(edges, "../external/interponet_tf/InterpoNet/inputs/temp_edges.dat");
+	// ✅ 4. 继续调用InterpoNet（使用RAFT生成的matches）
+    auto tcp_start = std::chrono::high_resolution_clock::now();
+    
+    std::string container_img1_path = "/app/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_10.png";
+	std::string container_img2_path = "/app/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_11.png";
+	std::string container_edges_path = "/app/external/InterpoNet/data/interponet_input/" + num_str + "_edges.dat";
+	std::string container_matches_path = "/app/external/RAFT/data/raft_matches/" + num_str + "_matches.txt";
+	std::string container_output_path = "/app/external/InterpoNet/data/interponet_output/" + num_str + "_output.flo";
+    
+    bool success = callInterpoNetTCP(container_img1_path, container_img2_path, 
+                                    container_edges_path, container_matches_path, 
+                                    container_output_path);
+    
+    auto tcp_end = std::chrono::high_resolution_clock::now();
+    auto tcp_duration = std::chrono::duration_cast<std::chrono::milliseconds>(tcp_end - tcp_start);
+    std::cout << "[TIMING] TCP InterpoNet inference: " << tcp_duration.count() << " ms" << std::endl;
+    
+    if (!success) {
+        std::cerr << "❌ InterpoNet TCP调用失败: " << num_str << std::endl;
+        return;
+    }
 
+	// ✅ 5. 读取结果文件计时
+    auto read_start = std::chrono::high_resolution_clock::now();
 
-	////////////////////////////////   Interpolation (完全不变) //////////////////////////////////////////////////////////////////
-
-	// int64 timeStart2 = getTickCount();
-
-	// if (points_filtered.size() > SHRT_MAX)
-	// {
-	// 	cout << "Too many points to interpolate";
-	// }
-
-	// flow.create(from.size(), CV_32FC2);
-	// Mat dense_flow = flow.getMat();
-
-	// Ptr<ximgproc::EdgeAwareInterpolator> gd = ximgproc::createEdgeAwareInterpolator();
-	// gd->setK(k);
-	// gd->setSigma(sigma);
-	// gd->setUsePostProcessing(use_post_proc);
-	// gd->setFGSLambda(fgs_lambda);
-	// gd->setFGSSigma(fgs_sigma);
-
-	// gd->interpolate(prev, points_filtered, cur, dst_points_filtered, dense_flow);
-
-	// long double execTime2 = (getTickCount() * 1.0000 - timeStart2) / (getTickFrequency() * 1.0000);
-	// std::cout << "Time to interpolate = " << execTime2 << "\n";
-}
-
-
-
-
-// 🔧 辅助函数：创建稀疏光流图
-Mat FeatureMatcher::createSparseFlowMap(const std::vector<Point2f>& src_points, 
-                                       const std::vector<Point2f>& dst_points, 
-                                       Size image_size) {
-	Mat sparse_flow = Mat::zeros(image_size, CV_32FC2);
+	// 读取生成的 .flo 光流结果
+	std::string flo_path = "../external/InterpoNet/data/interponet_output/" + num_str + "_output.flo";
+	cv::Mat dense_flow = readOpticalFlowFile(flo_path);
 	
-	for (size_t i = 0; i < src_points.size() && i < dst_points.size(); i++) {
-		Point2f flow_vec = dst_points[i] - src_points[i];
+	auto read_end = std::chrono::high_resolution_clock::now();
+    auto read_duration = std::chrono::duration_cast<std::chrono::milliseconds>(read_end - read_start);
+    std::cout << "[TIMING] Read .flo file: " << read_duration.count() << " ms" << std::endl;
+    
+	
+	if (dense_flow.empty()) {
+		std::cerr << "❌ 读取光流失败: " << flo_path << std::endl;
+	}else{
+		// 添加调试信息
+		std::cout << "Flow size: " << dense_flow.size() << std::endl;
+		std::cout << "Flow type: " << dense_flow.type() << std::endl;
 		
-		// 确保坐标在图像范围内
-		int x = (int)round(src_points[i].x);
-		int y = (int)round(src_points[i].y);
-		
-		if (x >= 0 && x < image_size.width && y >= 0 && y < image_size.height) {
-			sparse_flow.at<Vec2f>(y, x) = Vec2f(flow_vec.x, flow_vec.y);
+		// 检查是否有NaN
+		int nan_count = 0;
+		int zero_count = 0;
+		for(int i = 0; i < dense_flow.rows; i++) {
+			for(int j = 0; j < dense_flow.cols; j++) {
+				cv::Vec2f flow_vec = dense_flow.at<cv::Vec2f>(i, j);
+				if(std::isnan(flow_vec[0]) || std::isnan(flow_vec[1])) {
+					nan_count++;
+				}
+				if(flow_vec[0] == 0 && flow_vec[1] == 0) {
+					zero_count++;
+				}
+			}
 		}
+		std::cout << "NaN pixels: " << nan_count << std::endl;
+		std::cout << "Zero pixels: " << zero_count << std::endl;
 	}
-	
-	return sparse_flow;
+
+	// 在 dense_flow.copyTo(flow) 之前添加
+	cv::Scalar mean_flow, std_flow;
+	cv::meanStdDev(dense_flow, mean_flow, std_flow);
+	std::cout << "Flow statistics:" << std::endl;
+	std::cout << "  Mean: (" << mean_flow[0] << ", " << mean_flow[1] << ")" << std::endl;
+	std::cout << "  Std: (" << std_flow[0] << ", " << std_flow[1] << ")" << std::endl;
+
+	// 检查最大位移
+	double min_u, max_u, min_v, max_v;
+	std::vector<cv::Mat> flow_channels;
+	cv::split(dense_flow, flow_channels);
+	cv::minMaxLoc(flow_channels[0], &min_u, &max_u);
+	cv::minMaxLoc(flow_channels[1], &min_v, &max_v);
+	std::cout << "  U range: [" << min_u << ", " << max_u << "]" << std::endl;
+	std::cout << "  V range: [" << min_v << ", " << max_v << "]" << std::endl;
+	dense_flow.copyTo(flow);
+
+
+	// ✅ 总时间
+    auto total_end = std::chrono::high_resolution_clock::now();
+    auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start);
+    std::cout << "[TIMING] ===== TOTAL InterpoNet time: " << total_duration.count() << " ms =====" << std::endl;
+    
+	return;  // CV_32FC2
 }
+

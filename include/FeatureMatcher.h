@@ -23,6 +23,7 @@
 #include <string>	 // standard C++ I/O
 #include <algorithm> // includes max()
 #include <vector>
+#include <opencv2/core/utils/filesystem.hpp>
 
 // N.B need RLOF code from https://github.com/tsenst/RLOFLib
 // #include <RLOF_Flow.h>
@@ -40,10 +41,10 @@ public:
 
 	// Public functions
 	FeatureMatcher();
-	void degraf_flow_LK(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma);
-	void degraf_flow_RLOF(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma);
-	void degraf_flow_CudaLK(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma);
-    void degraf_flow_InterpoNet(InputArray from, InputArray to, OutputArray flow);
+	void degraf_flow_LK(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma,String num_str);
+	void degraf_flow_RLOF(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma,String num_str);
+	void degraf_flow_CudaLK(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma,String num_str);
+    void degraf_flow_InterpoNet(InputArray from, InputArray to, OutputArray flow,String num_str);
 	// void degraf_flow_GPU(InputArray from, InputArray to, OutputArray flow, int radius, float eps, bool use_post_proc, float fgs_lambda, float fgs_sigma);
 
 	// ✅ 新增：单例管理方法
@@ -51,9 +52,18 @@ public:
     static cv::Ptr<cv::cuda::SparsePyrLKOpticalFlow> getCudaTracker();
     static void cleanup();
     static void warmupCudaSparsePyrLK();
+    bool callInterpoNetTCP(const std::string& img1_path,
+        const std::string& img2_path,
+        const std::string& edge_path,
+        const std::string& match_path,
+        const std::string& out_path);
+    
+    bool callRAFTTCP(const std::string& image1_path,
+        const std::string& image2_path,
+        const std::string& points_path,
+        const std::string& output_path);
 
 private:
-    Mat createSparseFlowMap(const std::vector<Point2f>& src_points, const std::vector<Point2f>& dst_points, Size image_size);
 	// ✅ 添加：GPU检测器单例管理
     static CudaGradientDetector* shared_gpu_detector;
     static std::mutex gpu_detector_mutex;

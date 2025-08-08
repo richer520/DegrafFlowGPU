@@ -4,3 +4,5 @@ data/
 Dockerfile
 Dockerfile.cuda
 external/
+backup/
+opencv_contrib/

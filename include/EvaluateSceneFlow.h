@@ -1,6 +1,6 @@
 /*!
 \file EvaluateSceneFlow.h
-\brief Scene Flow evaluation module - 严格参考EvaluateOptFlow设计风格
+\brief Scene Flow evaluation module - Fixed version
 \author Gang Wang, Durham University
 */
 
@@ -15,39 +15,56 @@
 #include "opencv2/optflow.hpp"
 #include <string>
 #include <vector>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
+#include <cmath>
+#include <limits>
 
 using namespace cv;
+
+// 🆕 标准化场景流评估指标结构体
+struct SceneFlowMetrics
+{
+    double EPE3d;    // 平均3D端点误差 (米)
+    double AccS;     // 严格准确率 (EPE<0.05m 或 相对误差<5%)
+    double AccR;     // 宽松准确率 (EPE<0.1m 或 相对误差<10%)
+    double Outlier;  // 离群值比例 (EPE>0.3m 或 相对误差>10%)
+    int valid_count; // 有效像素数
+    double time_ms;  // 计算时间(毫秒)
+
+    // 构造函数
+    SceneFlowMetrics() : EPE3d(0.0), AccS(0.0), AccR(0.0), Outlier(0.0), valid_count(0), time_ms(0.0) {}
+};
 
 class EvaluateSceneFlow
 {
 public:
-    std::vector<double> stats_vector;
-    std::vector<std::vector<double>> all_stats;
-
     EvaluateSceneFlow();
 
     /**
-     * @brief 主评估流程（多区域mask/统计/可视化/写csv）
-     * @param method 光流算法名
-     * @param display_images 是否显示窗口
-     * @param image_no 图像编号
-     * @return int 0=成功，-1=失败
+     * @brief Main KITTI Scene Flow evaluation process (comprehensive evaluation)
+     * @param method Optical flow algorithm name (e.g., "degraf_flow_rlof", "farneback", "tvl1")
+     * @param display_images Whether to display visualization windows and save images
+     * @param image_no KITTI image sequence number (e.g., 0 for 000000_10.png)
+     * @return SceneFlowMetrics evaluation results
      */
-    int runEvaluation(const std::string &method, bool display_images, int image_no);
+    SceneFlowMetrics runEvaluation(const std::string &method, bool display_images, int image_no);
+    // 获取所有结果（用于统计）
+    const std::vector<SceneFlowMetrics> &getAllResults() const { return all_results_; }
 
-    /**
-     * @brief 计算一帧场景流误差统计（均值EPE、R0.1、R0.2、A90等）
-     * @param pred_scene_flow 预测场景流
-     * @param gt_scene_flow GT场景流
-     * @param image 原始输入图像
-     * @param region 区域名("all"/"discontinuities"/"untextured")
-     * @param display_images 是否显示
-     * @param stats_vector 输出统计结果
-     */
-    void calculateSceneFlowStats(const cv::Mat &pred_scene_flow,
-                                 const cv::Mat &gt_scene_flow,
-                                 const cv::Mat &image,
-                                 const std::string &region,
-                                 bool display_images,
-                                 std::vector<double> &stats_vector);
+private:
+    // 🔧 修复：将成员变量移到private区域
+    std::vector<SceneFlowMetrics> all_results_; // 存储所有评估结果
+
+    // 🔒 核心计算函数 - 私有化
+    SceneFlowMetrics calculateStandardMetrics(const cv::Mat &pred_scene_flow,
+                                              const cv::Mat &gt_scene_flow);
+    SceneFlowMetrics evaluateSingleFrame(const cv::Mat &pred_scene_flow,
+                                         const cv::Mat &gt_scene_flow,
+                                         bool verbose = true);
+    void writeMetricsToCSV(const SceneFlowMetrics &metrics,
+                           const std::string &method,
+                           int image_no,
+                           const std::string &csv_path);
 };
