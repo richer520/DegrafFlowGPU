@@ -72,6 +72,11 @@ Mat SceneFlowReconstructor::computeSceneFlow(const Mat &flow,
         return Mat();
     }
 
+    cout << "Flow size: " << flow.cols << "x" << flow.rows << endl;
+    cout << "Disp0 size: " << disp0.cols << "x" << disp0.rows << endl;
+    cout << "Flow type: " << flow.type() << endl;
+    cout << "Disp0 type: " << disp0.type() << endl;
+
     // Input validation 验证输入有效性。
     // 确保 flow 是二维光流图，且 disp0 与之大小一致，且不为空。否则视为无效输入。
     CV_Assert(!flow.empty() && flow.type() == CV_32FC2);
@@ -85,20 +90,17 @@ Mat SceneFlowReconstructor::computeSceneFlow(const Mat &flow,
     // Step 1: Convert disparity maps to proper format
     Mat disp0_f32, disp1_f32;
 
-    if (disp0.type() == CV_16UC1)
+    // 由于EvaluateSceneFlow中已经按KITTI标准转换过了，这里直接使用
+    if (disp0.type() == CV_32F)
     {
-        // KITTI format: convert from uint16 to float and scale
-        // KITTI 视差图是 CV_16UC1，真实值需除以 256 得到米单位。
-        /// 这一步将 KITTI 的原始视差（CV_16UC1，单位为 1/256 像素）转换为标准的浮点视差图，单位为像素。也支持原生的 CV_32F 格式。
-        disp0.convertTo(disp0_f32, CV_32F, 1.0 / 256.0);
-        cout << "Converted disparity0 from KITTI format (CV_16UC1 / 256)" << endl;
-    }
-    else if (disp0.type() == CV_32F)
-    {
-        // 如果已经是 CV_32F 格式，直接使用
-        // 这一步直接使用原生的 CV_32F 格式视差图
         disp0_f32 = disp0.clone();
-        cout << "Using disparity0 as float32 directly" << endl;
+        cout << "Using pre-converted disparity0 as float32" << endl;
+    }
+    else if (disp0.type() == CV_16UC1)
+    {
+        // 这种情况不应该发生，因为输入已经预处理过
+        cout << "Warning: Received raw KITTI format, converting..." << endl;
+        disp0.convertTo(disp0_f32, CV_32F, 1.0 / 256.0);
     }
     else
     {
@@ -117,13 +119,14 @@ Mat SceneFlowReconstructor::computeSceneFlow(const Mat &flow,
          */
 
         CV_Assert(disp1.size() == flow.size());
-        if (disp1.type() == CV_16UC1)
-        {
-            disp1.convertTo(disp1_f32, CV_32F, 1.0 / 256.0);
-        }
-        else
+        if (disp1.type() == CV_32F)
         {
             disp1_f32 = disp1.clone();
+        }
+        else if (disp1.type() == CV_16UC1)
+        {
+            cout << "Warning: Received raw KITTI disp1 format, converting..." << endl;
+            disp1.convertTo(disp1_f32, CV_32F, 1.0 / 256.0);
         }
         cout << "Using temporal disparity information." << endl;
     }

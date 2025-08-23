@@ -15,7 +15,7 @@ if(NOT DEFINED OpenCV_DIR)
 endif()
 
 find_package(OpenCV REQUIRED)
-
+find_package(Threads REQUIRED)
 # 输出 OpenCV 版本和包含路径
 message(STATUS "OpenCV version: ${OpenCV_VERSION}")
 message(STATUS "OpenCV include dirs: ${OpenCV_INCLUDE_DIRS}")
@@ -47,7 +47,7 @@ set_target_properties(degraf_flow PROPERTIES
 )
 
 # 链接 OpenCV 库
-target_link_libraries(degraf_flow ${OpenCV_LIBS} jsoncpp)
+target_link_libraries(degraf_flow ${OpenCV_LIBS} jsoncpp rt pthread)
 
 
 # ---------------------------------------

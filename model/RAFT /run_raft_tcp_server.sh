@@ -10,6 +10,7 @@ docker run -d \
   -p 9998:9998 \
   --name raft_tcp_server \
   raft_flow \
-#   python3 /app/tcp_server_raft.py
+  python3 /app/tcp_server_raft.py
 
+# docker run -it --rm   --gpus all   -v $(pwd):/app   -p 9998:9998   raft_flow bash
 echo "✅ RAFT TCP Server started. Listening on port 9998."

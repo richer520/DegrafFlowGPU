@@ -25,6 +25,23 @@
 
 using namespace cv;
 
+struct OptFlowMetrics 
+{
+    float EPE;
+    float std_dev;
+    float R05;
+    float R1;
+    float R2;
+    float R3;
+    float R5;
+    float R10;
+    double time_ms;
+    int image_no;
+    
+    OptFlowMetrics() : EPE(0.0f), std_dev(0.0f), R05(0.0f), R1(0.0f), 
+                       R2(0.0f), R3(0.0f), R5(0.0f), R10(0.0f), 
+                       time_ms(0.0), image_no(0) {}
+};
 class EvaluateOptFlow
 {
 
@@ -34,6 +51,9 @@ public:
 
 	// List of stats over all image pairs
 	std::vector<std::vector<float>> all_stats;
+
+	// 新增成员变量
+    std::vector<OptFlowMetrics> all_results_;
 
 	EvaluateOptFlow();
 
@@ -49,4 +69,8 @@ public:
 	void calculateStats(Mat errors, Mat mask, bool display_images); // adding this as public so it can update the stats_vector variable
 
 	int runEvaluation(String method, bool display, int image_no);
+
+	std::vector<OptFlowMetrics> runEvaluation(const String &method, bool display_images, const std::vector<int> &image_indices);
+    void calculateStatsForMetrics(Mat errors, Mat mask, OptFlowMetrics& metrics);
+    void clearResults();
 };

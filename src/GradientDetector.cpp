@@ -62,6 +62,9 @@ void GradientDetector::Create(IplImage *p_image, int p_window_width, int p_windo
         matrix_size.height = static_cast<int>(floor((double)(image_size.height - window_size.height) / (double)p_step_y));
         std::cout << "GradientDetector::Create - Image size: " << p_image->width << "x" << p_image->height << std::endl;
         std::cout << "Image depth: " << p_image->depth << ", channels: " << p_image->nChannels << std::endl;
+
+        std::cout << "CPU matrix_size: " << matrix_size.width << "x" << matrix_size.height 
+          << " = " << matrix_size.width * matrix_size.height << std::endl;
         // Allocate memory
         gradient_matrix = (Gradient **)malloc(matrix_size.height * sizeof(Gradient *));
         x = 0;

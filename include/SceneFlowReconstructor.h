@@ -49,7 +49,7 @@ private:
     bool isValidPoint(const cv::Point3f &point) const;
 
     // Constants for validation
-    static constexpr float MIN_DISPARITY = 0.1f;
-    static constexpr float MAX_DISPARITY = 256.0f;
-    static constexpr float MAX_DEPTH = 100.0f;
+    static constexpr float MIN_DISPARITY = 1.0f;     // 避免过远物体
+    static constexpr float MAX_DISPARITY = 300.0f;   // 合理的最大视差
+    static constexpr float MAX_DEPTH = 80.0f;        // 最大深度限制
 };

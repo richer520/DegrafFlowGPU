@@ -23,6 +23,7 @@
 #include <string>	 // standard C++ I/O
 #include <algorithm> // includes max()
 #include <vector>
+#include <sys/stat.h>  // for stat()
 #include <opencv2/core/utils/filesystem.hpp>
 
 // N.B need RLOF code from https://github.com/tsenst/RLOFLib
@@ -43,35 +44,39 @@ public:
 	FeatureMatcher();
 	void degraf_flow_LK(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma,String num_str);
 	void degraf_flow_RLOF(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma,String num_str);
-	void degraf_flow_CudaLK(InputArray from, InputArray to, OutputArray flow, int k, float sigma, bool use_post_proc, float fgs_lambda, float fgs_sigma,String num_str);
-    void degraf_flow_InterpoNet(InputArray from, InputArray to, OutputArray flow,String num_str);
-	// void degraf_flow_GPU(InputArray from, InputArray to, OutputArray flow, int radius, float eps, bool use_post_proc, float fgs_lambda, float fgs_sigma);
 
-	// ✅ 新增：单例管理方法
-    static CudaGradientDetector* getGPUDetector();
-    static cv::Ptr<cv::cuda::SparsePyrLKOpticalFlow> getCudaTracker();
-    static void cleanup();
-    static void warmupCudaSparsePyrLK();
-    bool callInterpoNetTCP(const std::string& img1_path,
-        const std::string& img2_path,
-        const std::string& edge_path,
-        const std::string& match_path,
-        const std::string& out_path);
+    std::vector<cv::Mat> degraf_flow_InterpoNet(
+        const std::vector<cv::Mat>& batch_i1,
+        const std::vector<cv::Mat>& batch_i2,
+        const std::vector<std::string>& batch_num_strs,
+        std::vector<std::vector<cv::Point2f>>* out_points_filtered = nullptr,    
+        std::vector<std::vector<cv::Point2f>>* out_dst_points_filtered = nullptr); 
     
-    bool callRAFTTCP(const std::string& image1_path,
-        const std::string& image2_path,
-        const std::string& points_path,
-        const std::string& output_path);
+    bool callRAFTTCP_batch(
+        const std::vector<std::string>& batch_img1_paths,
+        const std::vector<std::string>& batch_img2_paths,
+        const std::vector<std::string>& batch_points_paths,
+        const std::vector<std::string>& batch_output_paths
+    );
+    
+    bool callInterpoNetTCP_batch(
+        const std::vector<std::string>& batch_img1_paths,
+        const std::vector<std::string>& batch_img2_paths,
+        const std::vector<std::string>& batch_edges_paths,
+        const std::vector<std::string>& batch_matches_paths,
+        const std::vector<std::string>& batch_output_paths
+    );
 
 private:
-	// ✅ 添加：GPU检测器单例管理
-    static CudaGradientDetector* shared_gpu_detector;
-    static std::mutex gpu_detector_mutex;
-    static bool gpu_detector_initialized;
     
-    // ✅ 添加：CUDA SparsePyrLK单例管理
-    static cv::Ptr<cv::cuda::SparsePyrLKOpticalFlow> shared_cuda_tracker;
-    static std::mutex cuda_tracker_mutex;
-    static bool cuda_tracker_initialized;
+    // 缓存相关辅助函数
+    bool isFileUpToDate(const std::string& targetFile, const std::string& sourceFile);
+    bool isPointsCacheValid(const std::string& pointsFile, const std::string& imageFile);
+    bool isEdgeCacheValid(const std::string& edgeFile, const std::string& imageFile);
+    std::vector<cv::Point2f> loadCachedPoints(const std::string& pointsFile);
+
+    void parseMatchesFile(const std::string& matches_path,
+        std::vector<cv::Point2f>& src_points,
+        std::vector<cv::Point2f>& dst_points);
 };
 
