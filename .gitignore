@@ -8,3 +8,12 @@ backup/
 share_memory/
 tools/
 opencv_contrib/
+# ML weights
+*.ckpt*
+*.pth
+*.pt
+*.onnx
+*.pb
+*.h5
+*.tflite
+raft_Interponet/**/model/**
