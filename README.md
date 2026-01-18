@@ -1,7 +1,15 @@
 ## 🚀 Solution Overview (Pre-Sales View)
 
 ### TL;DR
-A **GPU-accelerated optical / scene flow pipeline** designed for **real-time robotics and autonomous driving**, reducing perception latency from **~X ms → ~Y ms** while preserving motion detail.
+A **GPU-accelerated optical / scene flow pipeline** for **robotics and autonomous driving perception**, demonstrating **strong accuracy gains with a clear path toward real-time deployment**.
+
+- **Optical Flow (KITTI 2015):** EPE **8.61 → 2.64** (↓ **69%**), Fl-all **32.39% → 28.98%**
+- **Scene Flow (KITTI 2015):** EPE3D **0.3832 m → 0.1602 m** (↓ **58%**), AccS **75.38% → 79.08%**, AccR **82.14% → 86.68%**
+- **Deployment insight:** current end-to-end runtime bottleneck is mainly **system integration overhead (I/O / cross-container communication)** rather than algorithmic complexity (thesis evaluation).
+
+> Notes: Metrics are reported from my MSc dissertation evaluation on **KITTI 2015** with **end-to-end measurement** (not kernel-only).
+
+---
 
 ### Why it matters
 Real-time perception systems are **latency-sensitive**.
@@ -10,7 +18,12 @@ Many optical/scene flow pipelines:
 - Are hard to deploy on **edge GPUs**
 - Trade accuracy for speed without controllable knobs
 
-This project focuses on **deployability**, not just algorithmic accuracy.
+This project focuses on **deployability**, not just algorithmic accuracy:
+- modular pipeline design (feature → sparse flow → interpolation)
+- measurable KPIs (accuracy, latency/FPS, stability)
+- reproducible setup for PoC delivery (Docker / scripts)
+
+---
 
 ### Target Use Cases
 - Autonomous driving perception pipelines
@@ -18,13 +31,26 @@ This project focuses on **deployability**, not just algorithmic accuracy.
 - Temporal consistency for downstream tasks
 - Edge GPU deployment with real-time constraints
 
+---
+
 ### Demo & PoC Scope
-- **Demo**: side-by-side latency & flow visualization comparison
-- **PoC (1–2 weeks)**:
-  - Integrated GPU flow module
-  - Benchmark report (latency / FPS / quality)
-  - Dockerized deployment
-  - Performance tuning knobs
+
+**Demo (30–90s)**
+1. Show baseline pipeline runtime + flow visualization  
+2. Switch to GPU-accelerated / optimized pipeline components  
+3. Compare: **runtime + flow quality (visual + error metrics)**  
+4. Show reproducibility: build/run scripts or Docker commands  
+
+**PoC (1–2 weeks)**
+- Integrated GPU flow module (or accelerated components)
+- Benchmark report (**latency / FPS / quality**) on customer-like data
+- Dockerized deployment / reproducible scripts
+- Performance tuning knobs (speed–accuracy modes)
+
+**What we need from customer**
+- Target hardware constraints (GPU model / FPS requirement / power budget)
+- Sample data (3–5 representative sequences)
+- Success criteria (latency threshold + acceptable quality)
 
 ---
 
