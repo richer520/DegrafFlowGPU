@@ -1,3 +1,33 @@
+## 🚀 Solution Overview (Pre-Sales View)
+
+### TL;DR
+A **GPU-accelerated optical / scene flow pipeline** designed for **real-time robotics and autonomous driving**, reducing perception latency from **~X ms → ~Y ms** while preserving motion detail.
+
+### Why it matters
+Real-time perception systems are **latency-sensitive**.
+Many optical/scene flow pipelines:
+- Fail to meet **30–60 FPS** requirements
+- Are hard to deploy on **edge GPUs**
+- Trade accuracy for speed without controllable knobs
+
+This project focuses on **deployability**, not just algorithmic accuracy.
+
+### Target Use Cases
+- Autonomous driving perception pipelines
+- Robotics motion estimation & tracking
+- Temporal consistency for downstream tasks
+- Edge GPU deployment with real-time constraints
+
+### Demo & PoC Scope
+- **Demo**: side-by-side latency & flow visualization comparison
+- **PoC (1–2 weeks)**:
+  - Integrated GPU flow module
+  - Benchmark report (latency / FPS / quality)
+  - Dockerized deployment
+  - Performance tuning knobs
+
+---
+
 # 🚗 DeGraF Flow GPU
 
 **GPU-Based Scene Flow Recovery using Dense Gradient-based Features (DeGraF)**  
