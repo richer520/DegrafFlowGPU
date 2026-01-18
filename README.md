@@ -5,7 +5,9 @@ A **GPU-accelerated optical / scene flow pipeline** for **robotics and autonomou
 
 - **Optical Flow (KITTI 2015):** EPE **8.61 → 2.64** (↓ **69%**), Fl-all **32.39% → 28.98%**
 - **Scene Flow (KITTI 2015):** EPE3D **0.3832 m → 0.1602 m** (↓ **58%**), AccS **75.38% → 79.08%**, AccR **82.14% → 86.68%**
-- **Deployment insight:** current end-to-end runtime bottleneck is mainly **system integration overhead (I/O / cross-container communication)** rather than algorithmic complexity (thesis evaluation).
+- **Deployment insight:** current end-to-end runtime bottleneck is mainly **system integration overhead (I/O / cross-container
+- **Hardware**（*GTX 1080 Ti, CUDA 12.7*）
+- communication)** rather than algorithmic complexity (thesis evaluation).
 
 > Notes: Metrics are reported from my MSc dissertation evaluation on **KITTI 2015** with **end-to-end measurement** (not kernel-only).
 
