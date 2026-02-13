@@ -382,18 +382,17 @@ static Mat errorHeatMap(const Mat_<Point2f> &flow, Mat mask)
 	return norm;
 }
 
-// ==============================================================================================
-// 新增：统一的批量/单帧评估接口
-// ==============================================================================================
+
+// Unified batch/single frame evaluation interface
 std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method, bool display_images, const std::vector<int> &image_indices)
 {
     std::vector<OptFlowMetrics> results;
     
-    // 判断是否支持批量处理
+    // Determine whether batch processing is supported
     bool is_batch_capable = (method == "degraf_flow_interponet");
     
     // =====================================================
-    // 步骤1: 数据准备
+    // Step 1: Data Preparation
     // =====================================================
     struct ImagePairData {
         Mat i1, i2;
@@ -405,12 +404,11 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
     std::vector<ImagePairData> batch_data;
     batch_data.reserve(image_indices.size());
     
-    // 加载所有数据
+    // load all data
     for (int image_no : image_indices) {
         ImagePairData data;
         data.image_no = image_no;
         
-        // 保持原有的路径构建逻辑
         char num[7];
         sprintf(num, "%06d", image_no);
         data.num_str = String(num);
@@ -420,7 +418,7 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
         data.i2_path = base_dir + "image_2/" + data.num_str + "_11.png";
         data.groundtruth_path = base_dir + "flow_noc/" + data.num_str + "_10.png";
         
-        // 保持原有的图像加载逻辑
+
         data.i1 = imread(data.i1_path, 1);
         data.i2 = imread(data.i2_path, 1);
         
@@ -433,7 +431,7 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
             continue;
         }
         
-        // 保持原有的图像预处理逻辑
+
         if (data.i1.depth() != CV_8U) data.i1.convertTo(data.i1, CV_8U);
         if (data.i2.depth() != CV_8U) data.i2.convertTo(data.i2, CV_8U);
         
@@ -445,14 +443,14 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
     }
     
     // =====================================================
-    // 步骤2: 光流计算（批量或逐帧）
+    // Step 2: Optical flow calculation (batch or frame by frame)
     // =====================================================
     std::vector<Mat> batch_flows;
     std::vector<double> individual_times;
-    std::vector<vector<Point2f>> batch_points1, batch_points2; // 用于可视化
+    std::vector<vector<Point2f>> batch_points1, batch_points2; 
     
     if (is_batch_capable && batch_data.size() > 1) {
-        // 批量处理：degraf_flow_interponet
+        // Batch processing: degraf_flow_interponet
         std::vector<Mat> batch_i1, batch_i2;
         std::vector<String> batch_num_strs;
         
@@ -465,7 +463,7 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
         double batch_start = getTickCount();
         FeatureMatcher matcher;
         
-        // 调用批量版本
+        // Call the batch version
         std::vector<std::vector<Point2f>> batch_points, batch_dst_points;
         batch_flows = matcher.degraf_flow_InterpoNet(
             batch_i1, batch_i2, batch_num_strs,
@@ -475,19 +473,19 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
         
         double total_time_ms = (getTickCount() - batch_start) / getTickFrequency() * 1000.0;
         
-        // 平均分配时间
+        // Evenly distribute time
         for (size_t i = 0; i < batch_flows.size(); ++i) {
             individual_times.push_back(total_time_ms / batch_flows.size());
         }
         
-        // 存储特征点用于可视化
+        //Store feature points for visualization
         if (display_images && !batch_points.empty()) {
             batch_points1 = batch_points;
             batch_points2 = batch_dst_points;
         }
         
     } else {
-        // 逐帧处理：其他所有方法
+        // Frame-by-frame processing: all other methods
         batch_flows.resize(batch_data.size());
         individual_times.resize(batch_data.size());
         batch_points1.resize(batch_data.size());
@@ -498,7 +496,7 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
             Mat flow;
             Mat i1 = data.i1, i2 = data.i2;
             
-            // 保持原有的图像预处理逻辑
+            // Image preprocessing
             if ((method == "farneback" || method == "tvl1" || method == "deepflow" || 
                  method == "DISflow_ultrafast" || method == "DISflow_fast" || method == "DISflow_medium") 
                  && i1.channels() == 3) {
@@ -512,7 +510,6 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
             
             double startTick = getTickCount();
             
-            // 保持原有的方法调用逻辑
             Ptr<DenseOpticalFlow> algorithm;
             
             if (method == "farneback")
@@ -550,7 +547,7 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
                 }
             }
             else if (method == "degraf_flow_interponet") {
-                // 单帧InterpoNet重定向到RLOF
+                // Single frame InterpoNet redirects to RLOF
                 FeatureMatcher algo;
                 algo.degraf_flow_RLOF(data.i1, data.i2, flow, 127, (0.05000000075F), true, (500.0F), (1.5F), data.num_str);
                 if (display_images) {
@@ -570,12 +567,12 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
             double time = ((double)getTickCount() - startTick) / getTickFrequency();
             
             batch_flows[i] = flow;
-            individual_times[i] = time * 1000.0; // 转换为毫秒
+            individual_times[i] = time * 1000.0; 
         }
     }
     
     // =====================================================
-    // 步骤3: 评估计算（保持原有逻辑）
+    // Step 3: Evaluate the calculation
     // =====================================================
     for (size_t i = 0; i < batch_data.size(); ++i) {
         const auto& data = batch_data[i];
@@ -591,11 +588,11 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
         metrics.time_ms = individual_times[i];
 
 		Mat kittiFlow = convertToKittiFlow(flow);
-		String output_path = "../data/outputs/kitti_rlof_results/" + data.num_str + "_10.png";
+		String output_path = "../data/outputs/"+ method+ "/" + data.num_str + "_10.png";
 		imwrite(output_path, kittiFlow);
 		printf("Saved KITTI flow to: %s\n", output_path.c_str());
 		
-        // 如果有ground truth，进行评估 - 保持原有逻辑
+        
         if (!data.groundtruth_path.empty()) {
             Mat ground_truth = readKittiGroundTruth(data.groundtruth_path);
             
@@ -606,14 +603,14 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
                 String error_measure = "endpoint";
                 String region = "all";
                 
-                // 保持原有的误差计算逻辑
+                // Error calculation
                 Mat computed_errors;
                 if (error_measure == "endpoint")
                     computed_errors = endpointError(flow, ground_truth);
                 else if (error_measure == "angular")
                     computed_errors = angularError(flow, ground_truth);
                 
-                // 保持原有的mask逻辑
+                // mask region
                 Mat mask;
                 if (region == "all")
                     mask = Mat::ones(ground_truth.size(), CV_8U) * 255;
@@ -663,7 +660,7 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
                     continue;
                 }
                 
-                // masking out NaNs and incorrect GT values - 保持原有逻辑
+                // masking out NaNs and incorrect GT values 
                 Mat truth_split[2];
                 split(ground_truth, truth_split);
                 Mat abs_mask = Mat((abs(truth_split[0]) < 1e9) & (abs(truth_split[1]) < 1e9));
@@ -671,14 +668,14 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
                 bitwise_and(abs_mask, nan_mask, nan_mask);
                 bitwise_and(nan_mask, mask, mask);
                 
-                // 计算统计指标 - 保持原有的calculateStats调用
+                // Calculate statistical indicators
                 printf("Using %s error measure\n", error_measure.c_str());
                 calculateStats(computed_errors, mask, display_images);
                 
-                // 同时提取指标到metrics结构体
+                // At the same time, extract indicators to the metrics structure
                 calculateStatsForMetrics(computed_errors, mask, metrics);
                 
-                // 保持原有的可视化逻辑
+
                 if (display_images) {
                     Mat im1 = data.i1, im2 = data.i2;
                     vector<Point2f> points1, points2;
@@ -695,22 +692,60 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
                     Mat ground = flowToDisplay(ground_truth);
                     Mat flow_image = flowToDisplay(flow);
 
-                    // Display all useful output images in one frame - 保持原有逻辑
+                    // Display all useful output images in one frame 
                     Mat win_mat(Size(data.i1.cols * 2, data.i1.rows * 3), CV_8UC3);
 
-                    imwrite("../data/outputs/06_0.png", data.i1);
-                    imwrite("../data/outputs/06_1.png", data.i2);
+                    imwrite("../data/outputs/010_01.png", data.i1);
+                    imwrite("../data/outputs/010_11.png", data.i2);
                     
-                    // Draw sparse flow field from degraf flow - 保持原有逻辑
+					// Generate DeGraF feature points visualization 
+					if (method == "degraf_flow_lk" || method == "degraf_flow_rlof" || method == "degraf_flow_interponet") {
+						Mat feature_points;
+						data.i1.copyTo(feature_points); 
+						
+						// Draw detected feature points (points1) as small circles
+						for (int i = 0; i < points1.size(); i++) {
+							Scalar color = Scalar(255, 255, 255);				
+							Mat overlay;
+							feature_points.copyTo(overlay);
+							circle(overlay, points1[i], 2, color, -1, cv::LINE_AA, 0);
+							addWeighted(feature_points, 0.3, overlay, 0.7, 0, feature_points);
+							
+						}
+						
+						// Save feature points visualization
+						imwrite("../data/outputs/feature_points.png", feature_points);
+						cout << "Detected " << points1.size() << " DeGraF feature points" << endl;
+					}
+                    // Draw sparse flow field from degraf flow
                     if (method == "degraf_flow_lk" || method == "degraf_flow_rlof" || method == "degraf_flow_interponet") {
-                        Mat sparse = Mat::zeros(data.i1.rows, data.i1.cols, CV_8UC3);
-                        bitwise_not(sparse, sparse);
+                        // Read RAFT dense optical flow as background
+						Mat raft_background = imread("../data/outputs/000010_raft_flow.png", IMREAD_COLOR);
+						Mat sparse;
+						
+						if (!raft_background.empty()) {
+							// If the size does not match, resize to the original image size
+							if (raft_background.size() != data.i1.size()) {
+								resize(raft_background, raft_background, data.i1.size());
+								cout << "Resized RAFT background to match original image" << endl;
+							}
+							raft_background.copyTo(sparse);
+							cout << "Using RAFT background successfully" << endl;
+						} else {
+							cout << "RAFT background not found, using fallback" << endl;
+							data.i2.copyTo(sparse);
+						}
 
-                        for (int j = 0; j < points1.size(); j += 4) {
-                            arrowedLine(sparse, points1[j], points2[j], Scalar(0, 0, 0), 2, 8, 0, 0.2);
-                        }
-                        imwrite("../data/outputs/sparse.png", sparse);
-                        sparse.copyTo(win_mat(Rect(0, data.i1.rows, data.i1.cols, data.i1.rows)));
+						for (int j = 0; j < points1.size(); j += 4) {
+							Mat overlay;
+							sparse.copyTo(overlay);
+							
+							arrowedLine(overlay, points1[j], points2[j], Scalar(255, 255, 255), 2, 8, 0, 0.2);
+							addWeighted(sparse, 0.3, overlay, 0.7, 0, sparse);
+						}
+						
+						imwrite("../data/outputs/sparse.png", sparse);
+						sparse.copyTo(win_mat(Rect(0, data.i1.rows, data.i1.cols, data.i1.rows)));
                     }
                     else {
                         Mat placeholder = Mat::zeros(data.i1.rows, data.i1.cols, CV_8UC3);
@@ -730,7 +765,7 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
                     ground.copyTo(win_mat(Rect(0, data.i1.rows * 2, data.i1.cols, data.i1.rows)));
                     heatmap.copyTo(win_mat(Rect(data.i1.cols, data.i1.rows * 2, data.i1.cols, data.i1.rows)));
 
-                    // Shrink to fit all image on the screen - 保持原有逻辑
+                    // Shrink to fit all image on the screen
                     resize(win_mat, win_mat, Size(1325, 600));
                     imshow("Results", win_mat);
                     
@@ -750,9 +785,8 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
     return results;
 }
 
-// ==============================================================================================
-// 新增：从calculateStats提取的度量计算函数（不改变原有calculateStats）
-// ==============================================================================================
+
+// Metric calculation functions extracted from calculateStats
 void EvaluateOptFlow::calculateStatsForMetrics(Mat errors, Mat mask, OptFlowMetrics& metrics) 
 {
     float R_thresholds[] = {0.5f, 1.f, 2.f, 3.f, 5.f, 10.f};
@@ -760,13 +794,13 @@ void EvaluateOptFlow::calculateStatsForMetrics(Mat errors, Mat mask, OptFlowMetr
     if (mask.empty())
         mask = Mat::ones(errors.size(), CV_8U);
     
-    // 计算均值和标准差
+    // Calculate mean and standard deviation
     Scalar s_mean, s_std;
     meanStdDev(errors, s_mean, s_std, mask);
     metrics.EPE = (float)s_mean[0];
     metrics.std_dev = (float)s_std[0];
     
-    // 计算RX统计
+    // Calculate RX statistics
     float* R_values[] = {&metrics.R05, &metrics.R1, &metrics.R2, &metrics.R3, &metrics.R5, &metrics.R10};
     for (int i = 0; i < 6; ++i) {
         float R = stat_RX(errors, R_thresholds[i], mask);
@@ -774,18 +808,16 @@ void EvaluateOptFlow::calculateStatsForMetrics(Mat errors, Mat mask, OptFlowMetr
     }
 }
 
-// ==============================================================================================
-// 新增：清空结果函数
-// ==============================================================================================
+
+// Clear result function
 void EvaluateOptFlow::clearResults() 
 {
     all_results_.clear();
     all_stats.clear();
 }
 
-// ==============================================================================================
-// 修改：原有的runEvaluation函数保持向后兼容
-// ==============================================================================================
+
+// Backwards compatible with the original runEvaluation function
 int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image_no) 
 {
     std::vector<int> indices = {image_no};
@@ -794,7 +826,6 @@ int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image
     if (!results.empty()) {
         OptFlowMetrics result = results[0];
         
-        // 保持原有的stats_vector逻辑
         stats_vector.clear();
         stats_vector.push_back(image_no);
         stats_vector.push_back(result.EPE);

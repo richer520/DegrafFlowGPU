@@ -13,12 +13,12 @@
 #include "opencv2/imgproc.hpp"
 #include <opencv2/core/types.hpp> 
 #include <opencv2/features2d.hpp>
+#include <opencv2/xfeatures2d/nonfree.hpp>
 #include "opencv2/calib3d.hpp"
 #include <opencv2/ximgproc.hpp>
 #include "opencv2/ximgproc/sparse_match_interpolator.hpp"
 #include "opencv2/optflow.hpp"
 #include "opencv2/core/ocl.hpp"
-#include "degraf_detector.h"
 #include <iostream>	 // standard C++ I/O
 #include <string>	 // standard C++ I/O
 #include <algorithm> // includes max()
@@ -29,9 +29,12 @@
 // N.B need RLOF code from https://github.com/tsenst/RLOFLib
 // #include <RLOF_Flow.h>
 #include <opencv2/optflow/rlofflow.hpp>
-#include <opencv2/cudaimgproc.hpp>
-#include <opencv2/cudaoptflow.hpp>
+
+#if USE_CUDA
+#include "degraf_detector.h"
+#endif
 using namespace cv;
+using cv::xfeatures2d::SIFT;
 
 class FeatureMatcher
 {
@@ -51,32 +54,8 @@ public:
         const std::vector<std::string>& batch_num_strs,
         std::vector<std::vector<cv::Point2f>>* out_points_filtered = nullptr,    
         std::vector<std::vector<cv::Point2f>>* out_dst_points_filtered = nullptr); 
-    
-    bool callRAFTTCP_batch(
-        const std::vector<std::string>& batch_img1_paths,
-        const std::vector<std::string>& batch_img2_paths,
-        const std::vector<std::string>& batch_points_paths,
-        const std::vector<std::string>& batch_output_paths
-    );
-    
-    bool callInterpoNetTCP_batch(
-        const std::vector<std::string>& batch_img1_paths,
-        const std::vector<std::string>& batch_img2_paths,
-        const std::vector<std::string>& batch_edges_paths,
-        const std::vector<std::string>& batch_matches_paths,
-        const std::vector<std::string>& batch_output_paths
-    );
 
 private:
-    
-    // 缓存相关辅助函数
-    bool isFileUpToDate(const std::string& targetFile, const std::string& sourceFile);
-    bool isPointsCacheValid(const std::string& pointsFile, const std::string& imageFile);
-    bool isEdgeCacheValid(const std::string& edgeFile, const std::string& imageFile);
-    std::vector<cv::Point2f> loadCachedPoints(const std::string& pointsFile);
 
-    void parseMatchesFile(const std::string& matches_path,
-        std::vector<cv::Point2f>& src_points,
-        std::vector<cv::Point2f>& dst_points);
 };
 

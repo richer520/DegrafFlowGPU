@@ -1,19 +1,34 @@
 build/
+build_cpu/
+build_cpu_try/
 .vscode/
+.DS_Store
+
+# Dataset / generated data
 data/
-Dockerfile
-Dockerfile.cuda
-external/
+external/RAFT/data/
+
+# Temporary / backup
 backup/
 share_memory/
-tools/
 opencv_contrib/
-# ML weights
-*.ckpt*
+*.tgz
+*.tar
+*.zip
+
+# Keep external code, ignore model artifacts only
+external/InterpoNet/models/
+external/InterpoNet/model.yml
+external/InterpoNet/.git.bak/
+external/**/checkpoints/
+external/**/weights/
+
+# ML weights / checkpoints
+*.ckpt
+*.ckpt.*
 *.pth
 *.pt
 *.onnx
 *.pb
 *.h5
 *.tflite
-raft_Interponet/**/model/**

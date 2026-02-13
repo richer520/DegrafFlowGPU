@@ -1,47 +1,74 @@
-# 🚗 DeGraF Flow GPU
+# GPU-Based Scene Flow with DeGraF, RAFT, and InterpoNet
 
-**GPU-Based Scene Flow Recovery using Dense Gradient-based Features (DeGraF)**  
-This project implements a sparse-to-dense optical flow pipeline based on DeGraF feature points, now leveraging OpenCV’s built-in SparseRLOFOpticalFlow, with optional CUDA acceleration for future GPU support.
+This repository implements a **GPU-accelerated sparse-to-dense scene flow pipeline** built on **Dense Gradient-based Features (DeGraF)**.  
+The pipeline combines:
 
-> Based on:  
-> 📝 *Stephenson et al., DeGraF-Flow: Extending DeGraF Features for Accurate and Efficient Sparse-to-Dense Optical Flow Estimation (ICIP 2019)*  
-> 🔗 [paper link](https://breckon.org/toby/publications/papers/stephenson19degraf-flow.pdf)
+- **CUDA DeGraF detector** for uniform feature extraction  
+- **RAFT** for dense optical flow estimation  
+- **InterpoNet** for learned edge-preserving interpolation  
+- KITTI-compatible evaluation for both optical and scene flow  
+
+This project extends the original **DeGraF-Flow** framework (Stephenson et al., ICIP 2019) with modern GPU and deep-learning modules.
 
 ---
 
-## 📦 Project Structure
+## Project Structure
 
 ```
 DEGRAF_FLOW_GPU/
-├── include/                # Header files
-├── src/                    # CPU implementation (.cpp)
-├── gpu/                    # CUDA modules and main
-├── data/                   # Input images + GT
-├── CMakeLists.txt          # CMake build config
-├── native_build_setup.sh   # One-click build
+├── include/                   # C++ headers
+├── src/                       # Core CPU/C++ implementation
+├── gpu/                       # CUDA modules (DeGraF detector, kernels)
+├── external/                  # Third-party models (RAFT / InterpoNet)
+│   ├── RAFT/                  # Cloned from RAFT GitHub
+│   └── InterpoNet/            # Cloned from InterpoNet GitHub
+├── data/
+│   ├── data_scene_flow/       # KITTI 2015 dataset
+│   ├── devkit_scene_flow/     # KITTI devkit evaluation tools
+│   └── outputs/               # Flow predictions, visualizations, metrics
+├── CMakeLists.txt             # C++/CUDA build config
+└── README.md                  # Project documentation
 ```
 
 ---
 
-## 🚀 Features
+## External Dependencies
 
-- ✅ DeGraF feature point detection (CPU / planned GPU)
-- ✅ Optical flow via OpenCV’s SparseRLOFOpticalFlow
-- ✅ Sparse-to-dense interpolation with EPIC
-- ✅ KITTI-compatible evaluation
-- ✅ Easy native build with OpenCV 4.9
+### RAFT (ECCV 2020)
+- Repository: [https://github.com/princeton-vl/RAFT](https://github.com/princeton-vl/RAFT)    
+- **Added files** in this project:
+  - `degraf_raft_matcher.py` – sampling RAFT dense flow at DeGraF feature locations  
+  - `raft_batch_tcp_server.py` – TCP server for batch inference  
+  - `Dockerfile` – defines RAFT environment (PyTorch + CUDA)  
+  - `run_raft_tcp_server.sh` – helper script to launch RAFT container  
+
+### InterpoNet (CVPR 2017)
+- Repository: [https://github.com/shayzweig/InterpoNet](https://github.com/shayzweig/InterpoNet)    
+- **Modified files** (replace originals with the provided versions in this repo):
+  - `InterpoNet.py`  
+  - `io_utils.py`  
+  - `utils.py`  
+  - `model.py`  
+- **Added files**:
+  - `interponet_batch_tcp_server.py` – TCP server for batch interpolation  
+  - `Dockerfile` – defines InterpoNet environment (TensorFlow 1.15 + CUDA 10.x)  
+  - `enter_interponet.sh` – helper script to enter the container  
 
 ---
 
-## 🛠️ Build & Run
+##  Requirements
 
-### Prerequisites
+- **C++/CUDA**
+  - CUDA ≥ 12.0  
+  - OpenCV 4.9 (built with `optflow`, `ximgproc`)  
+  - CMake ≥ 3.12, GCC ≥ 9
+- **Python/Docker**
+  - Docker with GPU support (`nvidia-docker2` or `--gpus all`)  
+  - Separate containers for **RAFT** (PyTorch) and **InterpoNet** (TF1.15)  
 
-- OpenCV 4.9 (with `optflow` and `ximgproc` modules)
-- CMake ≥ 3.12
-- GCC / Clang with C++14 support
+---
 
-### 1. Build
+## Build (C++/CUDA Core)
 
 ```bash
 mkdir build && cd build
@@ -49,53 +76,146 @@ cmake ..
 make -j$(nproc)
 ```
 
-### 2. Run
-
-```bash
-./degraf_flow
-```
-
-Modify `main.cpp` if you wish to change image paths or test sequences.
+This builds the CUDA-accelerated DeGraF detector and the C++ evaluation tools.
 
 ---
 
-## 📂 Data Format
+## Dataset Setup
+
+Download the **KITTI 2015 Scene Flow dataset** and **devkit**:
+
+- KITTI 2015: [http://www.cvlibs.net/datasets/kitti/eval_scene_flow.php](http://www.cvlibs.net/datasets/kitti/eval_scene_flow.php)
+
+Place data as:
 
 ```
 data/
-├── images/
-│   ├── 000006_10.png
-│   └── 000006_11.png
-├── flow_gt/
-│   └── gt_000006_10.png
-├── outputs/
+├── data_scene_flow/
+│   ├── training/
+│   └── testing/
+├── devkit_scene_flow/
+└── outputs/
 ```
 
 ---
 
-## 📊 Output
+## Running the Pipeline
 
-- Per-frame evaluation (EPE, R2.0, runtime, etc.)
-- Visualized flow + ground truth overlays
-- Output written to `data/outputs/`
+1. **Start RAFT server**
+
+```bash
+cd external/RAFT
+./run_raft_tcp_server.sh
+# Inside container:
+python raft_batch_tcp_server.py
+```
+
+2. **Start InterpoNet server**
+
+```bash
+cd external/InterpoNet
+./enter_interponet.sh
+# Inside container:
+python interponet_batch_tcp_server.py
+```
+
+3. **Run C++ main program**
+
+```bash
+./build/degraf_flow
+```
+
+This will:
+
+- Extract DeGraF features (CUDA)
+- Request RAFT dense flow, sample at features
+- Send sparse matches to InterpoNet server
+- Receive interpolated dense flow
+- Write KITTI-format outputs to `/data/outputs/`
 
 ---
 
-## 📚 References
+## Evaluation
 
-- I. Katramados & T. Breckon, *DeGraF: Dense Gradient-based Features*, ICIP 2016  
-- F. Stephenson et al., *DeGraF-Flow: Sparse-to-Dense Optical Flow Estimation*, ICIP 2019
+We use the official **KITTI devkit_scene_flow** for evaluation.
+
+```bash
+cd data/devkit_scene_flow
+make
+./evaluate_scene_flow ../outputs/ results.txt
+```
+
+Outputs include:
+
+- Optical flow metrics: **Fl-bg, Fl-fg, Fl-all**
+- Scene flow metrics: **EPE3D, AccS, AccR, Outlier %**
+- Visualization: flow/error maps (PNG)
 
 ---
 
-## 📃 License
+## References
+
+- F. Stephenson, T. Breckon, I. Katramados,
+  *DeGraF-Flow: Extending DeGraF Features for Accurate and Efficient Sparse-to-Dense Optical Flow Estimation*, ICIP 2019.
+- Z. Teed, J. Deng,
+  *RAFT: Recurrent All-Pairs Field Transforms for Optical Flow*, ECCV 2020.
+- S. Zweig, L. Wolf,
+  *InterpoNet: A Brain Inspired Neural Network for Optical Flow Dense Interpolation*, CVPR 2017.
+- M. Menze, A. Geiger,
+  *Object Scene Flow for Autonomous Vehicles*, CVPR 2015.
+
+---
+
+## License
 
 Academic and research use only.
 
 ---
 
-## 🙋 Author
+## Author
 
-- 💻 Adapted and extended by: *Gang Wang*
-- 🏫 Durham University, 2025
+- Gang Wang
+- Durham University, 2025
 
+```mermaid
+flowchart LR
+    K["KITTI images + GT"]
+
+    %% 推理 pipeline
+    subgraph pipeline["Scene-flow pipeline (C++ & CUDA)"]
+        D["CUDA DeGraF<br/>degraf_detector.cu"]
+        RC["RAFT client (C++)"]
+        RCont["RAFT container (TCP)"]
+        IC["InterpoNet client (C++)"]
+        ICont["InterpoNet container (TCP)"]
+        F["FeatureMatcher.cpp<br/>predicted optical flow"]
+        S["SceneFlowReconstructor.cpp<br/>predicted scene flow"]
+    end
+
+    %% 评估模块
+    subgraph eval["Evaluation"]
+        EvalOF["EvaluateOptFlow.cpp"]
+        EvalSF["EvaluateSceneFlow.cpp"]
+    end
+
+    main["main.cpp<br/>orchestrator"]
+
+    %% data flow 只保留核心数据流
+    K --> D
+    D --> RC
+    RC <--> RCont
+    RC --> IC
+    IC <--> ICont
+    ICont --> F
+    F --> S
+
+    %% evaluation 使用 KITTI GT + 预测结果
+    F --> EvalOF
+    S --> EvalSF
+    K --> EvalOF
+    K --> EvalSF
+
+    %% main 只连到两个子系统，减少电线
+    main --> pipeline
+    main --> eval
+ ```

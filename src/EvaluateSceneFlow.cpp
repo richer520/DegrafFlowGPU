@@ -10,24 +10,6 @@ using namespace std;
 
 EvaluateSceneFlow::EvaluateSceneFlow() {}
 
-// ===========================================
-// 在文件开头添加KITTI颜色映射表
-// ===========================================
-// KITTI官方对数误差颜色映射表
-static float LC[10][5] = {
-    {0,0.0625,49,54,149},
-    {0.0625,0.125,69,117,180},
-    {0.125,0.25,116,173,209},
-    {0.25,0.5,171,217,233},
-    {0.5,1,224,243,248},
-    {1,2,254,224,144},
-    {2,4,253,174,97},
-    {4,8,244,109,67},
-    {8,16,215,48,39},
-    {16,1000000000.0,165,0,38}
-};
-
-
 
 /**
  * Function: Parse fx, fy, cx, cy, baseline from KITTI calib_cam_to_cam/*.txt files
@@ -224,33 +206,8 @@ static cv::Mat readKITTIFlowGT(const std::string &ground_truth_path)
     return gt;
 }
 
-// 🆕 新增：相对误差计算
-static cv::Mat calculateRelativeError(const cv::Mat &epe_map, const cv::Mat &gt_scene_flow)
-{
-    cv::Mat rel_error = cv::Mat::zeros(epe_map.size(), CV_32F);
 
-    for (int v = 0; v < epe_map.rows; ++v)
-    {
-        for (int u = 0; u < epe_map.cols; ++u)
-        {
-            cv::Vec3f gt_vec = gt_scene_flow.at<cv::Vec3f>(v, u);
-            float gt_norm = cv::norm(gt_vec);
-            float epe = epe_map.at<float>(v, u);
-
-            if (gt_norm > 1e-6f && !std::isnan(epe))
-            {
-                rel_error.at<float>(v, u) = epe / gt_norm;
-            }
-            else
-            {
-                rel_error.at<float>(v, u) = std::numeric_limits<float>::quiet_NaN();
-            }
-        }
-    }
-    return rel_error;
-}
-
-// 🆕 新增：标准指标计算（参考学术标准）
+// Standard indicator calculation
 SceneFlowMetrics EvaluateSceneFlow::calculateStandardMetrics(const cv::Mat &pred_scene_flow,
                                                              const cv::Mat &gt_scene_flow)
 {
@@ -259,7 +216,7 @@ SceneFlowMetrics EvaluateSceneFlow::calculateStandardMetrics(const cv::Mat &pred
     int total_gt_valid = 0;
     int evaluable_points = 0;
 
-    // 🆕 添加失效区域分析变量
+    // Add failure area analysis variables
     std::vector<float> missing_region_magnitudes;
     std::vector<float> covered_region_magnitudes;
 
@@ -275,7 +232,7 @@ SceneFlowMetrics EvaluateSceneFlow::calculateStandardMetrics(const cv::Mat &pred
             cv::Vec3f pred = pred_scene_flow.at<cv::Vec3f>(v, u);
             cv::Vec3f gt = gt_scene_flow.at<cv::Vec3f>(v, u);
 
-            // 检查GT有效性
+            // Check GT validity
             bool gt_valid = (!std::isnan(gt[0]) && !std::isnan(gt[1]) && !std::isnan(gt[2]) &&
                              !(gt[0] == 0 && gt[1] == 0 && gt[2] == 0));
 
@@ -283,17 +240,17 @@ SceneFlowMetrics EvaluateSceneFlow::calculateStandardMetrics(const cv::Mat &pred
             {
                 total_gt_valid++;
 
-                // 🆕 计算GT幅值
+                // Calculate GT amplitude
                 float gt_magnitude = cv::norm(gt);
 
-                // 检查pred有效性
+                // Check the validity of pred
                 bool pred_valid = (!std::isnan(pred[0]) && !std::isnan(pred[1]) && !std::isnan(pred[2]) &&
                                    !(pred[0] == 0 && pred[1] == 0 && pred[2] == 0));
 
                 if (pred_valid)
                 {
                     evaluable_points++;
-                    covered_region_magnitudes.push_back(gt_magnitude); // 记录覆盖区域幅值
+                    covered_region_magnitudes.push_back(gt_magnitude); //Record the coverage area amplitude
 
                     float dx = pred[0] - gt[0];
                     float dy = pred[1] - gt[1];
@@ -314,13 +271,13 @@ SceneFlowMetrics EvaluateSceneFlow::calculateStandardMetrics(const cv::Mat &pred
                 }
                 else
                 {
-                    missing_region_magnitudes.push_back(gt_magnitude); // 记录失效区域幅值
+                    missing_region_magnitudes.push_back(gt_magnitude); //Record the amplitude of the failure area
                 }
             }
         }
     }
 
-    // 失效区域分析
+    // Failure area analysis
     if (!missing_region_magnitudes.empty() && !covered_region_magnitudes.empty())
     {
         float avg_missing = std::accumulate(missing_region_magnitudes.begin(),
@@ -330,19 +287,19 @@ SceneFlowMetrics EvaluateSceneFlow::calculateStandardMetrics(const cv::Mat &pred
                                             covered_region_magnitudes.end(), 0.0f) /
                             covered_region_magnitudes.size();
 
-        printf("=== 区域分析 ===\n");
-        printf("覆盖区域: %zu像素, 平均GT幅值: %.4f m\n",
+        printf("=== Regional Analysis ===\n");
+        printf("Coverage area: %zu px, Average GT amplitude: %.4f m\n",
                covered_region_magnitudes.size(), avg_covered);
-        printf("失效区域: %zu像素, 平均GT幅值: %.4f m\n",
+        printf("Failure area: %zu px, Average GT amplitude: %.4f m\n",
                missing_region_magnitudes.size(), avg_missing);
 
         if (avg_missing > avg_covered)
         {
-            printf("⚠️  失效区域比覆盖区域更困难 (大运动)\n");
+            printf("Failure area is more difficult than coverage area (large movement)\n");
         }
         else
         {
-            printf("✅ 失效区域比覆盖区域更简单 (小运动)\n");
+            printf("Failure area is simpler than coverage area (small movement)\n");
         }
         printf("==================\n");
     }
@@ -359,7 +316,7 @@ SceneFlowMetrics EvaluateSceneFlow::calculateStandardMetrics(const cv::Mat &pred
     return metrics;
 }
 
-// 🆕 新增：核心单帧评估函数
+// Core single frame evaluation function
 SceneFlowMetrics EvaluateSceneFlow::evaluateSingleFrame(const cv::Mat &pred_scene_flow,
                                                         const cv::Mat &gt_scene_flow,
                                                         bool verbose)
@@ -375,7 +332,7 @@ SceneFlowMetrics EvaluateSceneFlow::evaluateSingleFrame(const cv::Mat &pred_scen
     return metrics;
 }
 
-// 🔧 修改：简化CSV写入
+// Simplifying CSV writing
 void EvaluateSceneFlow::writeMetricsToCSV(const SceneFlowMetrics &metrics,
                                           const std::string &method,
                                           int image_no,
@@ -388,7 +345,7 @@ void EvaluateSceneFlow::writeMetricsToCSV(const SceneFlowMetrics &metrics,
         return;
     }
 
-    // 写入标准格式
+    // Write in standard format
     file << image_no << "," << method << ","
          << metrics.EPE3d << "," << metrics.AccS << "," << metrics.AccR << ","
          << metrics.Outlier << "," << metrics.valid_count << "," << metrics.time_ms << "\n";
@@ -396,166 +353,7 @@ void EvaluateSceneFlow::writeMetricsToCSV(const SceneFlowMetrics &metrics,
     file.close();
 }
 
-// ===========================================
-// 修改：generateSceneFlow4PanelVisualization() - 移除插值
-// ===========================================
-void EvaluateSceneFlow::generateSceneFlow4PanelVisualization(
-    const std::string& method_name,
-    int image_no,
-    const cv::Mat& original_image,
-    const cv::Mat& pred_scene_flow,
-    const cv::Mat& gt_scene_flow,
-    const std::string& output_path)
-{
-    int height = original_image.rows;
-    int width = original_image.cols;
-    
-    // A) 原始图像
-    cv::Mat panel_A = original_image.clone();
-    
-    // B) GT场景流 - 直接可视化，无插值
-    cv::Mat panel_B = sceneFlowToColorMap(gt_scene_flow);
-    
-    // C) 预测场景流 - 直接可视化，无插值
-    cv::Mat panel_C = sceneFlowToColorMap(pred_scene_flow);
-    
-    // D) 误差热图 - 基于原始数据
-    cv::Mat panel_D = computeSceneFlowErrorMap(pred_scene_flow, gt_scene_flow);
-    
-    // 创建2x2布局
-    cv::Mat result(height * 2, width * 2, CV_8UC3);
-    panel_A.copyTo(result(cv::Rect(0, 0, width, height)));
-    panel_B.copyTo(result(cv::Rect(width, 0, width, height)));
-    panel_C.copyTo(result(cv::Rect(0, height, width, height)));
-    panel_D.copyTo(result(cv::Rect(width, height, width, height)));
-    
-    cv::imwrite(output_path, result);
-}
 
-// ===========================================
-// 修改：sceneFlowToColorMap() - 采用光流策略
-// ===========================================
-cv::Mat EvaluateSceneFlow::sceneFlowToColorMap(const cv::Mat& scene_flow_3d) {
-    cv::Mat sf_copy = scene_flow_3d.clone();
-    
-    // 计算有效像素的统计信息
-    std::vector<cv::Vec3f> valid_flows;
-    for (int y = 0; y < sf_copy.rows; ++y) {
-        for (int x = 0; x < sf_copy.cols; ++x) {
-            cv::Vec3f sf = sf_copy.at<cv::Vec3f>(y, x);
-            if (!std::isnan(sf[0]) && !std::isnan(sf[1]) && !std::isnan(sf[2]) && 
-                (fabs(sf[0]) > 0.001f || fabs(sf[1]) > 0.001f)) {
-                valid_flows.push_back(sf);
-            }
-        }
-    }
-    
-    // 计算背景流（中位数）
-    cv::Vec3f background_flow(0.0f, 0.0f, 0.0f);
-    if (!valid_flows.empty()) {
-        std::vector<float> x_vals, y_vals;
-        for (const auto& flow : valid_flows) {
-            x_vals.push_back(flow[0]);
-            y_vals.push_back(flow[1]);
-        }
-        std::sort(x_vals.begin(), x_vals.end());
-        std::sort(y_vals.begin(), y_vals.end());
-        size_t mid = valid_flows.size() / 2;
-        background_flow = cv::Vec3f(x_vals[mid], y_vals[mid], 0.0f);
-    }
-    
-    // 关键：为所有无效像素填充背景流
-    for (int y = 0; y < sf_copy.rows; ++y) {
-        for (int x = 0; x < sf_copy.cols; ++x) {
-            cv::Vec3f sf = sf_copy.at<cv::Vec3f>(y, x);
-            // 如果是无效像素（NaN或接近零）
-            if (std::isnan(sf[0]) || std::isnan(sf[1]) || std::isnan(sf[2]) ||
-                (fabs(sf[0]) < 0.001f && fabs(sf[1]) < 0.001f && fabs(sf[2]) < 0.001f)) {
-                sf_copy.at<cv::Vec3f>(y, x) = background_flow;
-            }
-        }
-    }
-    
-    // 现在所有像素都有值，进行HSV映射
-    cv::Mat color_map(sf_copy.size(), CV_8UC3);
-    
-    // 计算归一化参数
-    float max_flow = 0.1f;
-    for (int y = 0; y < sf_copy.rows; ++y) {
-        for (int x = 0; x < sf_copy.cols; ++x) {
-            cv::Vec3f sf = sf_copy.at<cv::Vec3f>(y, x);
-            float mag = std::sqrt(sf[0]*sf[0] + sf[1]*sf[1]);
-            max_flow = std::max(max_flow, mag);
-        }
-    }
-    
-    float n = 8.0f;
-    
-    // 对所有像素着色
-    for (int y = 0; y < sf_copy.rows; ++y) {
-        for (int x = 0; x < sf_copy.cols; ++x) {
-            cv::Vec3f sf = sf_copy.at<cv::Vec3f>(y, x);
-            
-            float mag = std::sqrt(sf[0]*sf[0] + sf[1]*sf[1]);
-            float dir = std::atan2(sf[1], sf[0]);
-            
-            float h = fmod(dir/(2.0*M_PI)+1.0, 1.0);
-            float s = std::min(std::max(mag*n/max_flow, 0.0f), 1.0f);
-            float v = std::min(std::max(n-s, 0.0f), 1.0f);
-            
-            float r, g, b;
-            hsvToRgb(h, s, v, r, g, b);
-            color_map.at<cv::Vec3b>(y, x) = cv::Vec3b(b*255, g*255, r*255);
-        }
-    }
-    
-    return color_map;
-}
-
-// ===========================================
-// 修改现有函数：computeSceneFlowErrorMap
-// 使用KITTI官方误差颜色映射
-// ===========================================
-cv::Mat EvaluateSceneFlow::computeSceneFlowErrorMap(const cv::Mat& pred_sf, const cv::Mat& gt_sf) {
-    cv::Mat error_map(pred_sf.size(), CV_8UC3, cv::Scalar(0, 0, 0));
-    
-    for (int y = 0; y < pred_sf.rows; ++y) {
-        for (int x = 0; x < pred_sf.cols; ++x) {
-            cv::Vec3f pred = pred_sf.at<cv::Vec3f>(y, x);
-            cv::Vec3f gt = gt_sf.at<cv::Vec3f>(y, x);
-            
-            bool gt_valid = (!std::isnan(gt[0]) && !std::isnan(gt[1]) && !std::isnan(gt[2]));
-            
-            if (gt_valid) {
-                cv::Vec3b val(0, 0, 0);
-                
-                // 计算3D欧氏距离误差
-                float dx = pred[0] - gt[0];
-                float dy = pred[1] - gt[1]; 
-                float dz = pred[2] - gt[2];
-                float scene_flow_err = std::sqrt(dx*dx + dy*dy + dz*dz);
-                float scene_flow_mag = std::sqrt(gt[0]*gt[0] + gt[1]*gt[1] + gt[2]*gt[2]);
-                
-                // 归一化误差
-                float n_err = std::min(scene_flow_err/3.0f, 20.0f*scene_flow_err/(scene_flow_mag + 1e-6f));
-                
-                // 应用KITTI颜色映射
-                for (int i = 0; i < 10; i++) {
-                    if (n_err >= LC[i][0] && n_err < LC[i][1]) {
-                        val[2] = (uint8_t)LC[i][2]; // R
-                        val[1] = (uint8_t)LC[i][3]; // G
-                        val[0] = (uint8_t)LC[i][4]; // B
-                        break;
-                    }
-                }
-                
-                // 单像素填充，不使用3x3区域
-                error_map.at<cv::Vec3b>(y, x) = val;
-            }
-        }
-    }
-    return error_map;
-}
 
 void EvaluateSceneFlow::exportSceneFlowComparisonCSV(
     const std::string& csv_path,
@@ -566,13 +364,13 @@ void EvaluateSceneFlow::exportSceneFlowComparisonCSV(
     
     file << "Method,EPE3d(m),AccS(%),AccR(%),Outlier(%),Runtime(ms)\n";
     
-    // 遍历所有方法的结果
+    
     for (const auto& method_pair : method_results) {
         const std::string& method_name = method_pair.first;
         const std::vector<SceneFlowMetrics>& results = method_pair.second;
         
         if (!results.empty()) {
-            // 计算平均值
+            // Calculate the average
             double avg_EPE3d = 0, avg_AccS = 0, avg_AccR = 0, avg_Outlier = 0, avg_time = 0;
             for (const auto& metrics : results) {
                 avg_EPE3d += metrics.EPE3d;
@@ -583,7 +381,7 @@ void EvaluateSceneFlow::exportSceneFlowComparisonCSV(
             }
             size_t count = results.size();
             
-            // 写入该方法的平均值
+            // Write the average value of this method
             file << method_name << "+Disp," << avg_EPE3d/count << "," << avg_AccS/count << "," 
                  << avg_AccR/count << "," << avg_Outlier/count << "," << avg_time/count << "\n";
         }
@@ -592,12 +390,12 @@ void EvaluateSceneFlow::exportSceneFlowComparisonCSV(
 }
 
 /**
- * @brief 统一的场景流评估入口函数 - 替换原有的runEvaluation和runEvaluationBatch
- * @param method 光流方法名称
- * @param display_images 是否显示可视化
- * @param image_indices 图像索引数组（单帧传{i}，批量传{i1,i2,...}）
- * @return 评估结果数组
- */
+* @brief Unified scene flow evaluation entry point function - replaces the original runEvaluation and runEvaluationBatch
+* @param method Optical flow method name
+* @param display_images Display visualization function
+* @param image_indices Image index array (for single frame, pass {i}; for batch, pass {i1,i2,...})
+* @return Evaluation result array
+*/
 std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
     const std::string &method,
     bool display_images,
@@ -605,11 +403,11 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
 {
     std::vector<SceneFlowMetrics> results;
     
-    // 判断是否支持真批量处理
+    // Determine whether true batch processing is supported
     bool is_batch_capable = (method == "degraf_flow_interponet");
     
     // =====================================================
-    // 步骤1: 数据准备
+    // Step 1: Data preparation
     // =====================================================
     struct ImagePairData {
         cv::Mat i1, i2;
@@ -626,18 +424,18 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
     std::vector<ImagePairData> batch_data;
     batch_data.reserve(image_indices.size());
     
-    // 加载所有数据
+    // load all data
     for (int image_no : image_indices) {
         ImagePairData data;
         data.image_no = image_no;
         
-        // 路径构建
+        // Path construction
         char num[7];
         sprintf(num, "%06d", image_no);
         data.num_str = std::string(num);
         
-        // 根据实际需求选择training或testing目录
-        std::string base_dir = "../data/data_scene_flow/training/";  // 或者使用testing
+        // Select the training or testing directory based on actual needs
+        std::string base_dir = "../data/data_scene_flow/training/"; 
         data.i1_path = base_dir + "image_2/" + data.num_str + "_10.png";
         data.i2_path = base_dir + "image_2/" + data.num_str + "_11.png";
         data.disp0_path = base_dir + "disp_noc_0/" + data.num_str + "_10.png";
@@ -645,14 +443,14 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
         data.flow_gt_path = base_dir + "flow_noc/" + data.num_str + "_10.png";
         data.calib_path = "../data/data_scene_flow_calib/training/calib_cam_to_cam/" + data.num_str + ".txt";
         
-        // 加载图像
+        // load the image
         data.i1 = cv::imread(data.i1_path, 1);
         data.i2 = cv::imread(data.i2_path, 1);
         cv::Mat disp0 = cv::imread(data.disp0_path, cv::IMREAD_UNCHANGED);
         cv::Mat disp1 = cv::imread(data.disp1_path, cv::IMREAD_UNCHANGED);
         cv::Mat flow_gt = cv::imread(data.flow_gt_path, cv::IMREAD_UNCHANGED);
         
-        // 验证数据
+        // Verify data
         if (data.i1.empty() || data.i2.empty() || disp0.empty() || disp1.empty() || flow_gt.empty()) {
             printf("❌ Input missing %06d\n", image_no);
             continue;
@@ -663,7 +461,7 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
             continue;
         }
         
-        // 预处理灰度图
+        // Preprocess grayscale image
         if (data.i1.channels() == 3)
             cv::cvtColor(data.i1, data.gray1, cv::COLOR_BGR2GRAY);
         else
@@ -674,7 +472,7 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
         else
             data.gray2 = data.i2.clone();
         
-        // 加载标定参数
+        // Load calibration parameters
         if (!loadCameraIntrinsics(data.calib_path, data.fx, data.fy, data.cx, data.cy, data.baseline)) {
             data.fx = 721.5377f;
             data.fy = 721.5377f;
@@ -692,13 +490,13 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
     }
     
     // =====================================================
-    // 步骤2: 光流计算（根据方法选择批量或逐帧）
+    // Step 2: Optical flow calculation (select batch or frame by frame depending on the method)
     // =====================================================
     std::vector<cv::Mat> batch_flows;
     std::vector<double> individual_times;
     
     if (is_batch_capable && batch_data.size() > 1) {
-        // InterpoNet批量处理
+        // InterpoNet batch processing
         std::vector<cv::Mat> batch_i1, batch_i2;
         std::vector<std::string> batch_num_strs;
         
@@ -711,22 +509,22 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
         double batch_start = cv::getTickCount();
         FeatureMatcher matcher;
         
-        // 调用批量版本，获取特征点用于可视化（如果需要）
+        // Call the batch version to get feature points for visualization (if necessary)
         std::vector<std::vector<cv::Point2f>> batch_points, batch_dst_points;
         batch_flows = matcher.degraf_flow_InterpoNet(
             batch_i1, batch_i2, batch_num_strs,
-            display_images ? &batch_points : nullptr,      // 只在需要可视化时获取
+            display_images ? &batch_points : nullptr,      
             display_images ? &batch_dst_points : nullptr
         );
         
         double total_time_ms = (cv::getTickCount() - batch_start) / cv::getTickFrequency() * 1000.0;
         
-        // 批量处理时，每帧时间是平均时间
+        // When batch processing, the time per frame is the average time
         for (size_t i = 0; i < batch_flows.size(); ++i) {
             individual_times.push_back(total_time_ms / batch_flows.size());
         }
     } else {
-        // 逐帧处理（可并行）
+        // Process frame by frame (can be parallelized)
         batch_flows.resize(batch_data.size());
         individual_times.resize(batch_data.size());
         
@@ -737,7 +535,7 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
             
             double single_start = cv::getTickCount();
             
-            // 光流估计
+            // Optical flow estimation
             if (method == "farneback")
                 cv::optflow::createOptFlow_Farneback()->calc(data.gray1, data.gray2, flow);
             else if (method == "tvl1")
@@ -756,12 +554,11 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
                 FeatureMatcher matcher;
                 matcher.degraf_flow_LK(data.i1, data.i2, flow, 127, 0.05f, true, 500.0f, 1.5f, data.num_str);
             }
-            // else if (method == "degraf_flow_interponet") {
-            //     // 单帧InterpoNet重定向到RLOF（更高效）
-            //     printf("Note: Single frame InterpoNet redirected to RLOF for better efficiency\n");
-            //     FeatureMatcher matcher;
-            //     matcher.degraf_flow_RLOF(data.i1, data.i2, flow, 127, 0.05f, true, 500.0f, 1.5f, data.num_str);
-            // }
+            else if (method == "degraf_flow_interponet") {
+                printf("Note: Single frame InterpoNet redirected to RLOF for better efficiency\n");
+                FeatureMatcher matcher;
+                matcher.degraf_flow_RLOF(data.i1, data.i2, flow, 127, 0.05f, true, 500.0f, 1.5f, data.num_str);
+            }
             else {
                 printf("❌ Unknown optical flow method: %s\n", method.c_str());
             }
@@ -777,13 +574,13 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
     }
     
     // =====================================================
-    // 步骤3: 场景流重建和评估
+    // Step 3: Scene flow reconstruction and evaluation
     // =====================================================
     std::string csv_path = (batch_data.size() > 1) ? 
         "../data/outputs/batch_scene_flow_results.csv" : 
         "../data/outputs/scene_flow_results.csv";
     
-    // 首帧写入表头
+    // Write the first frame into the header
     if (batch_data[0].image_no == 0 || (batch_data.size() > 1 && batch_data[0].image_no == image_indices[0])) {
         std::ofstream header_file(csv_path, std::ios::trunc);
         header_file << "image_no,method,EPE3d,AccS(%),AccR(%),Outlier(%),valid_count,time_ms\n";
@@ -799,7 +596,7 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
             continue;
         }
         
-        // 场景流重建
+        // Scene flow reconstruction
         cv::Mat disp0_f32 = readKITTIDisparity(data.disp0_path);
         cv::Mat disp1_f32 = readKITTIDisparity(data.disp1_path);
         
@@ -811,7 +608,7 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
             continue;
         }
         
-        // 读取GT
+        // Read GT
         cv::Mat flow_gt_processed = readKITTIFlowGT(data.flow_gt_path);
         cv::Mat gt_scene_flow = reconstructor.computeSceneFlow(flow_gt_processed, disp0_f32, disp1_f32);
         
@@ -820,35 +617,20 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
             continue;
         }
         
-        // 评估
+
         SceneFlowMetrics metrics = evaluateSingleFrame(scene_flow, gt_scene_flow, true);
         metrics.time_ms = individual_times[i];
         
-        // 新增可视化调用
-        if (display_images) {
-            generateSceneFlow4PanelVisualization(
-                method, 
-                data.image_no,
-                data.i1,
-                scene_flow,
-                gt_scene_flow,
-                "../data/outputs/kitti_results/" + method + "_scene_flow_vis_" + data.num_str + ".png"  // 添加方法名
-            );
-        }
-        
-
-        // 写入CSV
         writeMetricsToCSV(metrics, method, data.image_no, csv_path);
         
-        // 存储结果
         results.push_back(metrics);
         all_results_.push_back(metrics);
         
-        printf("✅ Frame %06d evaluated successfully\n", data.image_no);
+        printf("Frame %06d evaluated successfully\n", data.image_no);
     }
     
     // =====================================================
-    // 步骤4: 批量处理时添加平均值
+    // Step 4: Add average value when batch processing
     // =====================================================
     if (batch_data.size() > 1 && !results.empty()) {
         double avg_EPE3d = 0, avg_AccS = 0, avg_AccR = 0, avg_Outlier = 0, avg_time = 0;
@@ -884,8 +666,8 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
 }
 
 /**
- * @brief 便利重载 - 保持向后兼容的单帧接口
- */
+* @brief Convenience overload - single-frame interface for backward compatibility
+*/
 SceneFlowMetrics EvaluateSceneFlow::runEvaluation(
     const std::string &method,
     bool display_images,
@@ -897,77 +679,6 @@ SceneFlowMetrics EvaluateSceneFlow::runEvaluation(
     if (!results.empty()) {
         return results[0];
     } else {
-        return SceneFlowMetrics();  // 返回默认构造的空结果
+        return SceneFlowMetrics();  // Returns an empty result of the default construction
     }
-}
-
-// 新增：视差稠密化函数
-cv::Mat EvaluateSceneFlow::densifyDisparity(const cv::Mat& sparse_disp) {
-    cv::Mat dense_disp = sparse_disp.clone();
-    
-    // 水平方向插值
-    for (int y = 0; y < dense_disp.rows; ++y) {
-        std::vector<int> valid_x;
-        for (int x = 0; x < dense_disp.cols; ++x) {
-            float disp = dense_disp.at<float>(y, x);
-            if (!std::isnan(disp) && disp > 0) {
-                valid_x.push_back(x);
-            }
-        }
-        
-        // 在有效点之间插值
-        for (size_t i = 0; i < valid_x.size() - 1; ++i) {
-            int x1 = valid_x[i], x2 = valid_x[i + 1];
-            float disp1 = dense_disp.at<float>(y, x1);
-            float disp2 = dense_disp.at<float>(y, x2);
-            
-            for (int x = x1 + 1; x < x2; ++x) {
-                float ratio = float(x - x1) / (x2 - x1);
-                dense_disp.at<float>(y, x) = disp1 * (1 - ratio) + disp2 * ratio;
-            }
-        }
-    }
-    return dense_disp;
-}
-
-// 新增：场景流稠密化函数
-cv::Mat EvaluateSceneFlow::densifySceneFlow(const cv::Mat& sparse_sf) {
-    cv::Mat dense_sf = sparse_sf.clone();
-    
-    for (int y = 0; y < dense_sf.rows; ++y) {
-        std::vector<int> valid_x;
-        for (int x = 0; x < dense_sf.cols; ++x) {
-            cv::Vec3f sf = dense_sf.at<cv::Vec3f>(y, x);
-            if (!std::isnan(sf[0]) && (sf[0] != 0 || sf[1] != 0 || sf[2] != 0)) {
-                valid_x.push_back(x);
-            }
-        }
-        
-        for (size_t i = 0; i < valid_x.size() - 1; ++i) {
-            int x1 = valid_x[i], x2 = valid_x[i + 1];
-            cv::Vec3f sf1 = dense_sf.at<cv::Vec3f>(y, x1);
-            cv::Vec3f sf2 = dense_sf.at<cv::Vec3f>(y, x2);
-            
-            for (int x = x1 + 1; x < x2; ++x) {
-                float ratio = float(x - x1) / (x2 - x1);
-                dense_sf.at<cv::Vec3f>(y, x) = sf1 * (1 - ratio) + sf2 * ratio;
-            }
-        }
-    }
-    return dense_sf;
-}
-
-// 新增：KITTI标准HSV转RGB
-void EvaluateSceneFlow::hsvToRgb(float h, float s, float v, float &r, float &g, float &b) {
-    float c = v * s;
-    float h2 = 6.0f * h;
-    float x = c * (1.0f - fabsf(fmodf(h2, 2.0f) - 1.0f));
-
-    if (0<=h2 && h2<1)       { r = c; g = x; b = 0; }
-    else if (1<=h2 && h2<2)  { r = x; g = c; b = 0; }
-    else if (2<=h2 && h2<3)  { r = 0; g = c; b = x; }
-    else if (3<=h2 && h2<4)  { r = 0; g = x; b = c; }
-    else if (4<=h2 && h2<5)  { r = x; g = 0; b = c; }
-    else if (5<=h2 && h2<=6) { r = c; g = 0; b = x; }
-    else                     { r = 0; g = 0; b = 0; }
 }

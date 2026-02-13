@@ -18,10 +18,10 @@ public:
     // Default constructor - requires setCameraParameters() to be called before use
     SceneFlowReconstructor();
 
-    // ✅ 新增：设置相机内参函数
+    // Set the camera internal parameter function
     void setCameraParameters(float fx, float fy, float cx, float cy, float baseline);
 
-    // 🎯 Core function: compute 3D scene flow from 2D optical flow and disparity maps
+    // Core function: compute 3D scene flow from 2D optical flow and disparity maps
     cv::Mat computeSceneFlow(const cv::Mat &flow,
                              const cv::Mat &disp0,
                              const cv::Mat &disp1 = cv::Mat());
@@ -33,23 +33,23 @@ public:
     float getCy() const { return cy_; }
     float getBaseline() const { return baseline_; }
 
-    // ✅ 新增：检查相机参数是否已设置
+    // Check if the camera parameters have been set
     bool isCameraParametersSet() const { return camera_params_set_; }
 
 private:
     // Camera intrinsic parameters
     float fx_, fy_, cx_, cy_, baseline_;
 
-    // ✅ 新增：标记相机参数是否已设置
+    // Mark whether the camera parameters have been set
     bool camera_params_set_;
 
-    // ✅ Core computation helper functions - kept here
+    // Core computation helper functions - kept here
     cv::Point3f reprojectTo3D(int u, int v, float disparity) const;
     bool isValidDisparity(float disparity) const;
     bool isValidPoint(const cv::Point3f &point) const;
 
     // Constants for validation
-    static constexpr float MIN_DISPARITY = 1.0f;     // 避免过远物体
-    static constexpr float MAX_DISPARITY = 300.0f;   // 合理的最大视差
-    static constexpr float MAX_DEPTH = 80.0f;        // 最大深度限制
+    static constexpr float MIN_DISPARITY = 1.0f;     
+    static constexpr float MAX_DISPARITY = 300.0f;   
+    static constexpr float MAX_DEPTH = 80.0f;       
 };

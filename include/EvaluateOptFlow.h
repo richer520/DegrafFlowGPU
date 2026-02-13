@@ -52,7 +52,6 @@ public:
 	// List of stats over all image pairs
 	std::vector<std::vector<float>> all_stats;
 
-	// 新增成员变量
     std::vector<OptFlowMetrics> all_results_;
 
 	EvaluateOptFlow();

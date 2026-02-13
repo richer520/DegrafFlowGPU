@@ -1,19 +1,10 @@
-// File description
-/*!
-  Copyright \htmlonly &copy \endhtmlonly 2008-2011 Cranfield University
-  \file PluginGradientFlow/GradientDetector.cpp
-  \brief GradientDetector class implementation
-  \author Ioannis Katramados
-*/
+
 
 #include "stdafx.h"
-// Include Files
 #include "GradientDetector.h"
-
-// new for gettickcount()
 #include <chrono>
 
-using namespace std; // new
+using namespace std; 
 
 //! Class constructor
 GradientDetector::GradientDetector()
@@ -200,7 +191,6 @@ int GradientDetector::DetectGradients(IplImage *p_image_src, int p_window_width,
     }
     else
     {
-        // 确保src_mat是8位类型
         if (src_mat.type() != CV_8UC1)
         {
             src_mat.convertTo(image_8u_mat, CV_8UC1);
