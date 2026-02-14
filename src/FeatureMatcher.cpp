@@ -16,6 +16,9 @@
 #if __has_include(<opencv2/xfeatures2d/nonfree.hpp>)
 #include <opencv2/xfeatures2d/nonfree.hpp>
 #define DEGRAF_HAVE_XFEATURES2D 1
+#elif __has_include(<opencv2/xfeatures2d.hpp>)
+#include <opencv2/xfeatures2d.hpp>
+#define DEGRAF_HAVE_XFEATURES2D 1
 #else
 #define DEGRAF_HAVE_XFEATURES2D 0
 #endif
