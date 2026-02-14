@@ -35,7 +35,12 @@ inline cv::Ptr<cv::Feature2D> createSiftDetector(int nfeatures, int nOctaveLayer
 #if DEGRAF_HAVE_XFEATURES2D
 	return cv::xfeatures2d::SIFT::create(nfeatures, nOctaveLayers, contrastThreshold, edgeThreshold, sigma);
 #else
+	#if defined(CV_VERSION_MAJOR) && ((CV_VERSION_MAJOR > 4) || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 4))
 	return cv::SIFT::create(nfeatures, nOctaveLayers, contrastThreshold, edgeThreshold, sigma);
+	#else
+	// Fallback for environments where SIFT API is unavailable at compile time.
+	return cv::ORB::create(std::max(nfeatures, 500), 1.2f, 8, 31, 0, 2, cv::ORB::HARRIS_SCORE, 31, 20);
+	#endif
 #endif
 }
 }
