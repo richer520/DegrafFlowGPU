@@ -13,10 +13,29 @@
 #include <unistd.h>
 #include <json/json.h>
 
+#if __has_include(<opencv2/xfeatures2d/nonfree.hpp>)
+#include <opencv2/xfeatures2d/nonfree.hpp>
+#define DEGRAF_HAVE_XFEATURES2D 1
+#else
+#define DEGRAF_HAVE_XFEATURES2D 0
+#endif
+
 #if USE_CUDA
 #include <cuda_runtime.h>
 #include "degraf_detector.h"
 #endif
+
+namespace {
+inline cv::Ptr<cv::Feature2D> createSiftDetector(int nfeatures, int nOctaveLayers,
+                                                  double contrastThreshold, double edgeThreshold,
+                                                  double sigma) {
+#if DEGRAF_HAVE_XFEATURES2D
+	return cv::xfeatures2d::SIFT::create(nfeatures, nOctaveLayers, contrastThreshold, edgeThreshold, sigma);
+#else
+	return cv::SIFT::create(nfeatures, nOctaveLayers, contrastThreshold, edgeThreshold, sigma);
+#endif
+}
+}
 
 // Constructor
 FeatureMatcher::FeatureMatcher()
@@ -99,14 +118,14 @@ void FeatureMatcher::degraf_flow_LK(InputArray from, InputArray to, OutputArray 
 	else if (point == 2)
 	{
 		vector<KeyPoint> keypoints;
-		Ptr<SIFT> detector = SIFT::create(0, 2, 0.01, 10.0, 1.6);
+		Ptr<cv::Feature2D> detector = createSiftDetector(0, 2, 0.01, 10.0, 1.6);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
 	else if (point == 3)
 	{
 		vector<KeyPoint> keypoints;
-		Ptr<SIFT> detector = SIFT::create(7000, 3, 0.00, 100.0);
+		Ptr<cv::Feature2D> detector = createSiftDetector(7000, 3, 0.00, 100.0, 1.6);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
@@ -270,7 +289,7 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 	else if (point == 2)
 	{
 		vector<KeyPoint> keypoints;
-		Ptr<SIFT> detector = SIFT::create(0, 2, 0.01, 10.0, 1.6);
+		Ptr<cv::Feature2D> detector = createSiftDetector(0, 2, 0.01, 10.0, 1.6);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
@@ -302,7 +321,7 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 	else if (point == 6)
 	{
 		vector<KeyPoint> keypoints;
-		Ptr<SIFT> detector = SIFT::create(5400, 3, 0.00, 100.0);
+		Ptr<cv::Feature2D> detector = createSiftDetector(5400, 3, 0.00, 100.0, 1.6);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
