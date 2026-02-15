@@ -12,6 +12,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <json/json.h>
+#include <cstdlib>
 
 #if __has_include(<opencv2/xfeatures2d/nonfree.hpp>)
 #include <opencv2/xfeatures2d/nonfree.hpp>
@@ -29,6 +30,24 @@
 #endif
 
 namespace {
+inline std::string getProjectRoot()
+{
+	const char *env_path = std::getenv("DEGRAF_PROJECT_ROOT");
+	if (env_path && std::string(env_path).size() > 0)
+		return std::string(env_path);
+	if (cv::utils::fs::exists("/root/autodl-tmp/projects/DegrafFlowGPU"))
+		return "/root/autodl-tmp/projects/DegrafFlowGPU";
+	return "/app";
+}
+
+inline std::string getInterpoNetEdgeModelPath()
+{
+	const char *env_path = std::getenv("INTERPONET_EDGE_MODEL_YML");
+	if (env_path && std::string(env_path).size() > 0)
+		return std::string(env_path);
+	return getProjectRoot() + "/external/InterpoNet/model.yml";
+}
+
 inline cv::Ptr<cv::Feature2D> createSiftDetector(int nfeatures, int nOctaveLayers,
                                                   double contrastThreshold, double edgeThreshold,
                                                   double sigma) {
@@ -529,14 +548,19 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
 	batch_flows.reserve(batch_i1.size());
 
 	// Pre-create all necessary folders
-	std::string raft_base_path = "../external/RAFT/data/degraf_input/";
+	std::string project_root = getProjectRoot();
+	std::string raft_base_path = project_root + "/external/RAFT/data/degraf_input/";
 	std::string raft_images_folder = raft_base_path + "degraf_images/";
 	std::string raft_points_folder = raft_base_path + "degraf_points/";
-	std::string base_path_external = "../external/InterpoNet/data/interponet_input/";
+	std::string base_path_external = project_root + "/external/InterpoNet/data/interponet_input/";
+	std::string raft_matches_folder = project_root + "/external/RAFT/data/raft_matches/";
+	std::string interponet_output_folder = project_root + "/external/InterpoNet/data/interponet_output/";
 
 	cv::utils::fs::createDirectories(raft_images_folder);
 	cv::utils::fs::createDirectories(raft_points_folder);
 	cv::utils::fs::createDirectories(base_path_external);
+	cv::utils::fs::createDirectories(raft_matches_folder);
+	cv::utils::fs::createDirectories(interponet_output_folder);
 
 	// =====================================================
 	// Step 1: Intelligent feature detection (with caching)
@@ -665,13 +689,13 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
 			cv::imwrite(img2_path, batch_i2[idx]);
 		}
 
-		raft_img1_paths.push_back("/app/data/degraf_input/degraf_images/" + num_str + "_10.png");
-		raft_img2_paths.push_back("/app/data/degraf_input/degraf_images/" + num_str + "_11.png");
-		raft_points_paths.push_back("/app/data/degraf_input/degraf_points/" + num_str + "_points.txt");
-		raft_matches_paths.push_back("/app/data/raft_matches/" + num_str + "_matches.txt");
+		raft_img1_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_10.png");
+		raft_img2_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_11.png");
+		raft_points_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_points/" + num_str + "_points.txt");
+		raft_matches_paths.push_back(project_root + "/external/RAFT/data/raft_matches/" + num_str + "_matches.txt");
 
 		// Save the local path for subsequent reading
-		local_matches_paths.push_back("../external/RAFT/data/raft_matches/" + num_str + "_matches.txt");
+		local_matches_paths.push_back(project_root + "/external/RAFT/data/raft_matches/" + num_str + "_matches.txt");
 	}
 
 	auto prep_end = std::chrono::high_resolution_clock::now();
@@ -749,7 +773,7 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
 
 			if (!sed)
 			{
-				sed = cv::ximgproc::createStructuredEdgeDetection("../external/InterpoNet/model.yml");
+				sed = cv::ximgproc::createStructuredEdgeDetection(getInterpoNetEdgeModelPath());
 			}
 
 			cv::Mat imgFloat, edges;
@@ -758,11 +782,11 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
 			FlowUtils::save_edge_dat(edges, edges_dat_path);
 		}
 
-		interponet_img1_paths.push_back("/app/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_10.png");
-		interponet_img2_paths.push_back("/app/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_11.png");
-		interponet_edges_paths.push_back("/app/external/InterpoNet/data/interponet_input/" + num_str + "_edges.dat");
-		interponet_matches_paths.push_back("/app/external/RAFT/data/raft_matches/" + num_str + "_matches.txt");
-		interponet_output_paths.push_back("/app/external/InterpoNet/data/interponet_output/" + num_str + "_output.flo");
+		interponet_img1_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_10.png");
+		interponet_img2_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_11.png");
+		interponet_edges_paths.push_back(project_root + "/external/InterpoNet/data/interponet_input/" + num_str + "_edges.dat");
+		interponet_matches_paths.push_back(project_root + "/external/RAFT/data/raft_matches/" + num_str + "_matches.txt");
+		interponet_output_paths.push_back(project_root + "/external/InterpoNet/data/interponet_output/" + num_str + "_output.flo");
 	}
 
 	auto edge_end = std::chrono::high_resolution_clock::now();
@@ -792,7 +816,7 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
 	for (size_t idx = 0; idx < batch_num_strs.size(); ++idx)
 	{
 		const std::string &num_str = batch_num_strs[idx];
-		std::string flo_path = "../external/InterpoNet/data/interponet_output/" + num_str + "_output.flo";
+		std::string flo_path = project_root + "/external/InterpoNet/data/interponet_output/" + num_str + "_output.flo";
 
 		cv::Mat dense_flow = FlowUtils::readOpticalFlowFile(flo_path);
 

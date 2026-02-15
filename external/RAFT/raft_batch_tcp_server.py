@@ -9,16 +9,29 @@ import json
 import sys
 import os
 
-sys.path.append('/app/external/RAFT')
-sys.path.append('/app/external/RAFT/core')
-sys.path.append('/app')
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.environ.get(
+    "DEGRAF_PROJECT_ROOT",
+    os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
+)
+
+sys.path.append(SCRIPT_DIR)
+sys.path.append(os.path.join(SCRIPT_DIR, "core"))
+sys.path.append(PROJECT_ROOT)
 
 from degraf_raft_matcher import RAFTModelManager, run_raft_matching_batch
 
 class RAFTBatchTCPServer:
-    def __init__(self, port=9998, model_path='/app/external/RAFT/models/raft-kitti.pth'):
+    def __init__(self, port=9998, model_path=None):
         self.port = port
-        self.model_path = model_path
+        if model_path is None:
+            default_model = os.environ.get("RAFT_MODEL_PATH")
+            if default_model:
+                self.model_path = default_model
+            else:
+                self.model_path = os.path.join(os.path.dirname(__file__), "checkpoints", "raft-kitti.pth")
+        else:
+            self.model_path = model_path
         self.model_manager = RAFTModelManager()
         
     def handle_batch_request(self, request_data):
@@ -117,7 +130,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description='RAFT Batch TCP Server')
     parser.add_argument('--port', type=int, default=9998, help='Server port')
-    parser.add_argument('--model', type=str, default='/app/models/raft-kitti.pth', 
+    parser.add_argument('--model', type=str, default=None, 
                         help='Path to RAFT model checkpoint')
     args = parser.parse_args()
     

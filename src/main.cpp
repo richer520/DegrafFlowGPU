@@ -5,6 +5,7 @@
 #include "FeatureMatcher.h"
 #include "SaliencyDetector.h"
 #include "EvaluateOptFlow.h"
+#include "EvaluateSceneFlow.h"
 #include "vo_features.h"
 
 // OpenCV - requires contrib modules
@@ -25,34 +26,23 @@ using namespace std;
 
 int main(int argc, char **argv)
 {
-	////////////////////////// Optical Flow (CPU-only) //////////////////////////
-	// *** Must first specify image file locations in the run_evaluation function in EvaluateOptFlow class ***
+	////////////////////////// Optical Flow (GPU pipeline) //////////////////////////
+	bool use_batch_processing = true;
+	int batch_size = 5;
+	bool display_images = false;
+	int start_image = 0;
+	int total_images = 10;
 
-	// Configuration parameters
-	bool use_batch_processing = false;  // CPU-only path: run frame by frame
-	int batch_size = 5;               // Batch size
-
-	// Multi-method evaluation configuration
-	std::vector<String> methods = {
-		"degraf_flow_lk",           // CPU DeGraF + LK
-		"degraf_flow_rlof",         // Baseline RLOF
-		// "deepflow",           // deepflow
-		// "farneback", // farneback
-		// "tvl1", 	// tvl1
-		// "DISflow_fast", // DISflow_fast
-		// "DISflow_medium", // DISflow_medium
+	std::vector<String> optical_methods = {
+		"degraf_flow_interponet",
+		"degraf_flow_rlof",
 	};
 
-	bool display_images = false;        
-	int start_image = 0;                
-	int total_images = 10;              
-
 	EvaluateOptFlow evaluator;
-	std::map<String, std::vector<OptFlowMetrics>> method_results;
-	cout << "Running CPU-only optical flow evaluation (LK + RLOF)." << endl;
-	cout << "Scene flow evaluation is disabled in this mode." << endl;
+	std::map<String, std::vector<OptFlowMetrics>> optical_method_results;
+	cout << "Running GPU optical flow evaluation (InterpoNet + RLOF baseline)." << endl;
 
-	for (const auto& method : methods) {
+	for (const auto& method : optical_methods) {
 		cout << "\n--- Evaluating optical flow method: " << method << " ---" << endl;
 		
 		evaluator.clearResults();
@@ -77,7 +67,7 @@ int main(int argc, char **argv)
 				
 				
 				for (const auto& result : batch_results) {
-					method_results[method].push_back(result);
+					optical_method_results[method].push_back(result);
 				}
 			}
 		} else {
@@ -90,12 +80,12 @@ int main(int argc, char **argv)
 					evaluator.runEvaluation(method, display_images, single_index);
 				
 				if (!single_result.empty()) {
-					method_results[method].push_back(single_result[0]);
+					optical_method_results[method].push_back(single_result[0]);
 				}
 			}
 		}
 		
-		const auto& results = method_results[method];
+		const auto& results = optical_method_results[method];
 		if (!results.empty()) {
 			cout << "\n--- Optical Flow Stats [" << method << "] ---\n";
 			cout << "# EPE      STD      0.5     1        2        3       5       10       time\n";
@@ -131,6 +121,63 @@ int main(int argc, char **argv)
 			cout << "--------------------------------------------\n";
 		}
 	}
+
+	////////////////////////// 3D Scene Flow evaluation //////////////////////////
+	EvaluateSceneFlow evaluatorscene;
+	std::map<std::string, std::vector<SceneFlowMetrics>> scene_method_results;
+
+	std::vector<std::string> scene_methods = {
+		"degraf_flow_interponet",
+		"degraf_flow_rlof",
+	};
+
+	for (const auto& method : scene_methods) {
+		cout << "\n--- Evaluating scene flow method: " << method << " ---" << endl;
+		evaluatorscene.clearResults();
+
+		if (use_batch_processing && method == "degraf_flow_interponet") {
+			cout << "Using batch processing for " << method << " (batch_size=" << batch_size << ")" << endl;
+			for (int batch_idx = 0; batch_idx < total_images; batch_idx += batch_size) {
+				int current_batch_size = std::min(batch_size, total_images - batch_idx);
+				std::vector<int> batch_indices;
+				for (int i = 0; i < current_batch_size; ++i) {
+					batch_indices.push_back(start_image + batch_idx + i);
+				}
+				std::vector<SceneFlowMetrics> batch_results =
+					evaluatorscene.runEvaluation(method, display_images, batch_indices);
+
+				scene_method_results[method].insert(
+					scene_method_results[method].end(),
+					batch_results.begin(),
+					batch_results.end());
+			}
+		} else {
+			for (int i = start_image; i < start_image + total_images; ++i) {
+				SceneFlowMetrics result = evaluatorscene.runEvaluation(method, display_images, i);
+				scene_method_results[method].push_back(result);
+			}
+		}
+
+		const auto& results = scene_method_results[method];
+		if (!results.empty()) {
+			double avg_EPE3d = 0, avg_AccS = 0, avg_AccR = 0, avg_Outlier = 0, avg_time = 0;
+			for (const auto &metrics : results) {
+				avg_EPE3d += metrics.EPE3d;
+				avg_AccS += metrics.AccS;
+				avg_AccR += metrics.AccR;
+				avg_Outlier += metrics.Outlier;
+				avg_time += metrics.time_ms;
+			}
+			size_t count = results.size();
+			cout << "SceneFlow averages for " << method
+				 << " | EPE3d: " << avg_EPE3d / count
+				 << " | AccS: " << avg_AccS / count
+				 << " | AccR: " << avg_AccR / count
+				 << " | Outlier: " << avg_Outlier / count
+				 << " | Time: " << avg_time / count << " ms" << endl;
+		}
+	}
+	evaluatorscene.exportSceneFlowComparisonCSV("../data/outputs/scene_flow_comparison.csv", scene_method_results);
 
 	return 0;
 }

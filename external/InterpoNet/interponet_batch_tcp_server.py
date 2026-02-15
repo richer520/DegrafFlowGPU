@@ -13,8 +13,14 @@ import numpy as np
 import gc
 import tensorflow as tf
 
-sys.path.append('/app/external/InterpoNet')
-sys.path.append('/app')
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.environ.get(
+    "DEGRAF_PROJECT_ROOT",
+    os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
+)
+
+sys.path.append(SCRIPT_DIR)
+sys.path.append(PROJECT_ROOT)
 
 # Import single frame and batch processing functions
 from InterpoNet import run_interponet_inference, run_interponet_inference_batch, force_cleanup
@@ -23,7 +29,9 @@ from InterpoNet import run_interponet_inference, run_interponet_inference_batch,
 class TCPServer:
     def __init__(self, port=9999):
         self.port = port
-        self.model_path = '/app/external/InterpoNet/models/best_model_kitti2015.ckpt'
+        env_model = os.environ.get("INTERPONET_MODEL_PATH")
+        env_model_dir = os.environ.get("INTERPONET_MODEL_DIR", "/root/autodl-tmp/models/interponet")
+        self.model_path = env_model if env_model else os.path.join(env_model_dir, "best_model_kitti2015.ckpt")
         self.request_count = 0
         self.cleanup_interval = 10  
         

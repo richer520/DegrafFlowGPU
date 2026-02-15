@@ -4,9 +4,26 @@
 #include <iomanip>
 #include <sstream>
 #include <numeric>
+#include <cstdlib>
 
 using namespace cv;
 using namespace std;
+
+static std::string getDataSceneFlowRoot()
+{
+    const char *env_path = std::getenv("DEGRAF_DATA_PATH");
+    if (env_path && std::string(env_path).size() > 0)
+        return std::string(env_path);
+    return "/root/autodl-tmp/data/kitti/data_scene_flow";
+}
+
+static std::string getDataSceneFlowCalibRoot()
+{
+    const char *env_path = std::getenv("DEGRAF_CALIB_PATH");
+    if (env_path && std::string(env_path).size() > 0)
+        return std::string(env_path);
+    return "/root/autodl-tmp/data/kitti/data_scene_flow_calib";
+}
 
 EvaluateSceneFlow::EvaluateSceneFlow() {}
 
@@ -434,14 +451,13 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
         sprintf(num, "%06d", image_no);
         data.num_str = std::string(num);
         
-        // Select the training or testing directory based on actual needs
-        std::string base_dir = "../data/data_scene_flow/training/"; 
+        std::string base_dir = getDataSceneFlowRoot() + "/training/";
         data.i1_path = base_dir + "image_2/" + data.num_str + "_10.png";
         data.i2_path = base_dir + "image_2/" + data.num_str + "_11.png";
         data.disp0_path = base_dir + "disp_noc_0/" + data.num_str + "_10.png";
         data.disp1_path = base_dir + "disp_noc_1/" + data.num_str + "_10.png";
         data.flow_gt_path = base_dir + "flow_noc/" + data.num_str + "_10.png";
-        data.calib_path = "../data/data_scene_flow_calib/training/calib_cam_to_cam/" + data.num_str + ".txt";
+        data.calib_path = getDataSceneFlowCalibRoot() + "/training/calib_cam_to_cam/" + data.num_str + ".txt";
         
         // load the image
         data.i1 = cv::imread(data.i1_path, 1);

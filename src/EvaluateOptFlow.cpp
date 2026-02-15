@@ -6,11 +6,20 @@
 
 #include "EvaluateOptFlow.h"
 #include "FeatureMatcher.h"
+#include <cstdlib>
 
 using namespace std;
 using namespace cv;
 using namespace cv::optflow;
 using namespace std;
+
+static String getDataSceneFlowRoot()
+{
+	const char *env_path = std::getenv("DEGRAF_DATA_PATH");
+	if (env_path && std::string(env_path).size() > 0)
+		return String(env_path);
+	return String("/root/autodl-tmp/data/kitti/data_scene_flow");
+}
 
 EvaluateOptFlow::EvaluateOptFlow()
 {
@@ -413,7 +422,8 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
         sprintf(num, "%06d", image_no);
         data.num_str = String(num);
         
-        String base_dir = "../data/data_scene_flow/training/";
+        String data_root = getDataSceneFlowRoot();
+        String base_dir = data_root + "/training/";
         data.i1_path = base_dir + "image_2/" + data.num_str + "_10.png";
         data.i2_path = base_dir + "image_2/" + data.num_str + "_11.png";
         data.groundtruth_path = base_dir + "flow_noc/" + data.num_str + "_10.png";
