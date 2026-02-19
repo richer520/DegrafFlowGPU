@@ -28,6 +28,9 @@ using namespace cv;
 struct OptFlowMetrics 
 {
     float EPE;
+    float Fl_bg;
+    float Fl_fg;
+    float Fl_all;
     float std_dev;
     float R05;
     float R1;
@@ -38,7 +41,7 @@ struct OptFlowMetrics
     double time_ms;
     int image_no;
     
-    OptFlowMetrics() : EPE(0.0f), std_dev(0.0f), R05(0.0f), R1(0.0f), 
+    OptFlowMetrics() : EPE(0.0f), Fl_bg(0.0f), Fl_fg(0.0f), Fl_all(0.0f), std_dev(0.0f), R05(0.0f), R1(0.0f), 
                        R2(0.0f), R3(0.0f), R5(0.0f), R10(0.0f), 
                        time_ms(0.0), image_no(0) {}
 };
@@ -72,4 +75,7 @@ public:
 	std::vector<OptFlowMetrics> runEvaluation(const String &method, bool display_images, const std::vector<int> &image_indices);
     void calculateStatsForMetrics(Mat errors, Mat mask, OptFlowMetrics& metrics);
     void clearResults();
+    void exportOpticalFlowTableCSV(
+        const std::string& csv_path,
+        const std::map<std::string, std::vector<OptFlowMetrics>>& method_results);
 };

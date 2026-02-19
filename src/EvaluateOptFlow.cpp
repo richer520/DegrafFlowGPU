@@ -13,6 +13,47 @@ using namespace cv;
 using namespace cv::optflow;
 using namespace std;
 
+static void computeKittiFlMetrics(const Mat_<Point2f> &pred_flow,
+                                  const Mat_<Point2f> &gt_flow,
+                                  const Mat &valid_mask,
+                                  const Mat &fg_mask,
+                                  OptFlowMetrics &metrics)
+{
+    auto calc_fl = [&](const Mat &mask) -> float {
+        int bad = 0, total = 0;
+        for (int y = 0; y < pred_flow.rows; ++y) {
+            for (int x = 0; x < pred_flow.cols; ++x) {
+                if (mask.at<uchar>(y, x) == 0) continue;
+                const Point2f p = pred_flow(y, x);
+                const Point2f g = gt_flow(y, x);
+                if (std::isnan(p.x) || std::isnan(p.y) || std::isnan(g.x) || std::isnan(g.y)) continue;
+                const Point2f d = p - g;
+                const float epe = std::sqrt(d.ddot(d));
+                const float mag = std::sqrt(g.ddot(g));
+                total++;
+                if (epe > 3.0f && epe > 0.05f * mag) bad++;
+            }
+        }
+        return total > 0 ? 100.0f * bad / total : 0.0f;
+    };
+
+    Mat all_mask = valid_mask.clone();
+    metrics.Fl_all = calc_fl(all_mask);
+
+    if (!fg_mask.empty() && fg_mask.size() == valid_mask.size()) {
+        Mat fg_valid, bg_valid;
+        bitwise_and(valid_mask, fg_mask, fg_valid);
+        Mat fg_inv;
+        bitwise_not(fg_mask, fg_inv);
+        bitwise_and(valid_mask, fg_inv, bg_valid);
+        metrics.Fl_fg = calc_fl(fg_valid);
+        metrics.Fl_bg = calc_fl(bg_valid);
+    } else {
+        metrics.Fl_fg = metrics.Fl_all;
+        metrics.Fl_bg = metrics.Fl_all;
+    }
+}
+
 static String getDataSceneFlowRoot()
 {
 	const char *env_path = std::getenv("DEGRAF_DATA_PATH");
@@ -685,6 +726,14 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
                 // At the same time, extract indicators to the metrics structure
                 calculateStatsForMetrics(computed_errors, mask, metrics);
                 
+                String obj_map_path = getDataSceneFlowRoot() + "/training/obj_map/" + data.num_str + "_10.png";
+                Mat obj_map = imread(obj_map_path, IMREAD_GRAYSCALE);
+                Mat fg_mask;
+                if (!obj_map.empty() && obj_map.size() == mask.size()) {
+                    fg_mask = obj_map > 0;
+                }
+                computeKittiFlMetrics(flow, ground_truth, mask, fg_mask, metrics);
+                
 
                 if (display_images) {
                     Mat im1 = data.i1, im2 = data.i2;
@@ -824,6 +873,38 @@ void EvaluateOptFlow::clearResults()
 {
     all_results_.clear();
     all_stats.clear();
+}
+
+void EvaluateOptFlow::exportOpticalFlowTableCSV(
+    const std::string &csv_path,
+    const std::map<std::string, std::vector<OptFlowMetrics>> &method_results)
+{
+    std::ofstream file(csv_path, std::ios::trunc);
+    if (!file.is_open()) return;
+
+    file << "Method,EPE(px),Fl-bg(%),Fl-fg(%),Fl-all(%),Runtime(ms)\n";
+    for (const auto &pair : method_results) {
+        const std::string &method = pair.first;
+        const std::vector<OptFlowMetrics> &results = pair.second;
+        if (results.empty()) continue;
+
+        double epe = 0.0, fl_bg = 0.0, fl_fg = 0.0, fl_all = 0.0, time_ms = 0.0;
+        for (const auto &m : results) {
+            epe += m.EPE;
+            fl_bg += m.Fl_bg;
+            fl_fg += m.Fl_fg;
+            fl_all += m.Fl_all;
+            time_ms += m.time_ms;
+        }
+        const double n = static_cast<double>(results.size());
+        file << method << ","
+             << epe / n << ","
+             << fl_bg / n << ","
+             << fl_fg / n << ","
+             << fl_all / n << ","
+             << time_ms / n << "\n";
+    }
+    file.close();
 }
 
 

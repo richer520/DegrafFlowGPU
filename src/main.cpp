@@ -20,6 +20,7 @@
 #include <vector>
 #include <chrono>
 #include <map>
+#include <opencv2/core/utils/filesystem.hpp>
 
 using namespace cv;
 using namespace std;
@@ -37,6 +38,8 @@ int main(int argc, char **argv)
 		"degraf_flow_interponet",
 		"degraf_flow_rlof",
 	};
+
+	cv::utils::fs::createDirectories("../data/outputs");
 
 	EvaluateOptFlow evaluator;
 	std::map<String, std::vector<OptFlowMetrics>> optical_method_results;
@@ -121,6 +124,7 @@ int main(int argc, char **argv)
 			cout << "--------------------------------------------\n";
 		}
 	}
+	evaluator.exportOpticalFlowTableCSV("../data/outputs/table_i_optical_flow.csv", optical_method_results);
 
 	////////////////////////// 3D Scene Flow evaluation //////////////////////////
 	EvaluateSceneFlow evaluatorscene;
@@ -178,6 +182,7 @@ int main(int argc, char **argv)
 		}
 	}
 	evaluatorscene.exportSceneFlowComparisonCSV("../data/outputs/scene_flow_comparison.csv", scene_method_results);
+	evaluatorscene.exportSceneFlowComparisonCSV("../data/outputs/table_ii_scene_flow.csv", scene_method_results);
 
 	return 0;
 }
