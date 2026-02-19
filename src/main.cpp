@@ -20,10 +20,35 @@
 #include <vector>
 #include <chrono>
 #include <map>
+#include <sstream>
 #include <opencv2/core/utils/filesystem.hpp>
 
 using namespace cv;
 using namespace std;
+
+static void printUsage(const char *prog)
+{
+	cout << "Usage: " << prog << " [options]\n"
+		 << "Options:\n"
+		 << "  --start <int>         Start frame index (default: 0)\n"
+		 << "  --count <int>         Number of frame pairs to evaluate (default: 10)\n"
+		 << "  --batch-size <int>    Batch size for interponet mode (default: 5)\n"
+		 << "  --no-batch            Disable batch processing\n"
+		 << "  --display             Enable visualization windows\n"
+		 << "  --methods <csv>       Methods to run, e.g. degraf_flow_interponet,degraf_flow_rlof\n"
+		 << "  --help                Show this help message\n";
+}
+
+static vector<string> splitCSV(const string &input)
+{
+	vector<string> out;
+	string item;
+	std::stringstream ss(input);
+	while (std::getline(ss, item, ',')) {
+		if (!item.empty()) out.push_back(item);
+	}
+	return out;
+}
 
 int main(int argc, char **argv)
 {
@@ -38,6 +63,46 @@ int main(int argc, char **argv)
 		"degraf_flow_interponet",
 		"degraf_flow_rlof",
 	};
+	std::vector<std::string> scene_methods = {
+		"degraf_flow_interponet",
+		"degraf_flow_rlof",
+	};
+
+	for (int i = 1; i < argc; ++i) {
+		string arg = argv[i];
+		if (arg == "--help") {
+			printUsage(argv[0]);
+			return 0;
+		} else if (arg == "--start" && i + 1 < argc) {
+			start_image = std::stoi(argv[++i]);
+		} else if (arg == "--count" && i + 1 < argc) {
+			total_images = std::stoi(argv[++i]);
+		} else if (arg == "--batch-size" && i + 1 < argc) {
+			batch_size = std::stoi(argv[++i]);
+		} else if (arg == "--no-batch") {
+			use_batch_processing = false;
+		} else if (arg == "--display") {
+			display_images = true;
+		} else if (arg == "--methods" && i + 1 < argc) {
+			vector<string> methods = splitCSV(argv[++i]);
+			optical_methods.clear();
+			scene_methods.clear();
+			for (const auto &m : methods) {
+				optical_methods.push_back(m);
+				scene_methods.push_back(m);
+			}
+		} else {
+			cerr << "Unknown/invalid argument: " << arg << "\n";
+			printUsage(argv[0]);
+			return 1;
+		}
+	}
+
+	cout << "[Config] start=" << start_image
+		 << ", count=" << total_images
+		 << ", batch=" << (use_batch_processing ? "on" : "off")
+		 << ", batch_size=" << batch_size
+		 << ", display=" << (display_images ? "on" : "off") << endl;
 
 	cv::utils::fs::createDirectories("../data/outputs");
 
@@ -129,11 +194,6 @@ int main(int argc, char **argv)
 	////////////////////////// 3D Scene Flow evaluation //////////////////////////
 	EvaluateSceneFlow evaluatorscene;
 	std::map<std::string, std::vector<SceneFlowMetrics>> scene_method_results;
-
-	std::vector<std::string> scene_methods = {
-		"degraf_flow_interponet",
-		"degraf_flow_rlof",
-	};
 
 	for (const auto& method : scene_methods) {
 		cout << "\n--- Evaluating scene flow method: " << method << " ---" << endl;
