@@ -44,8 +44,10 @@ static vector<string> splitCSV(const string &input)
 	vector<string> out;
 	string item;
 	std::stringstream ss(input);
-	while (std::getline(ss, item, ',')) {
-		if (!item.empty()) out.push_back(item);
+	while (std::getline(ss, item, ','))
+	{
+		if (!item.empty())
+			out.push_back(item);
 	}
 	return out;
 }
@@ -68,30 +70,47 @@ int main(int argc, char **argv)
 		"degraf_flow_rlof",
 	};
 
-	for (int i = 1; i < argc; ++i) {
+	for (int i = 1; i < argc; ++i)
+	{
 		string arg = argv[i];
-		if (arg == "--help") {
+		if (arg == "--help")
+		{
 			printUsage(argv[0]);
 			return 0;
-		} else if (arg == "--start" && i + 1 < argc) {
+		}
+		else if (arg == "--start" && i + 1 < argc)
+		{
 			start_image = std::stoi(argv[++i]);
-		} else if (arg == "--count" && i + 1 < argc) {
+		}
+		else if (arg == "--count" && i + 1 < argc)
+		{
 			total_images = std::stoi(argv[++i]);
-		} else if (arg == "--batch-size" && i + 1 < argc) {
+		}
+		else if (arg == "--batch-size" && i + 1 < argc)
+		{
 			batch_size = std::stoi(argv[++i]);
-		} else if (arg == "--no-batch") {
+		}
+		else if (arg == "--no-batch")
+		{
 			use_batch_processing = false;
-		} else if (arg == "--display") {
+		}
+		else if (arg == "--display")
+		{
 			display_images = true;
-		} else if (arg == "--methods" && i + 1 < argc) {
+		}
+		else if (arg == "--methods" && i + 1 < argc)
+		{
 			vector<string> methods = splitCSV(argv[++i]);
 			optical_methods.clear();
 			scene_methods.clear();
-			for (const auto &m : methods) {
+			for (const auto &m : methods)
+			{
 				optical_methods.push_back(m);
 				scene_methods.push_back(m);
 			}
-		} else {
+		}
+		else
+		{
 			cerr << "Unknown/invalid argument: " << arg << "\n";
 			printUsage(argv[0]);
 			return 1;
@@ -110,64 +129,74 @@ int main(int argc, char **argv)
 	std::map<String, std::vector<OptFlowMetrics>> optical_method_results;
 	cout << "Running GPU optical flow evaluation (InterpoNet + RLOF baseline)." << endl;
 
-	for (const auto& method : optical_methods) {
+	for (const auto &method : optical_methods)
+	{
 		cout << "\n--- Evaluating optical flow method: " << method << " ---" << endl;
-		
+
 		evaluator.clearResults();
-		
-		if (use_batch_processing && method == "degraf_flow_interponet") {
+
+		if (use_batch_processing && method == "degraf_flow_interponet")
+		{
 			// InterpoNet uses batch processing
 			cout << "Using batch processing for " << method << " (batch_size=" << batch_size << ")" << endl;
-			
-			for (int batch_idx = 0; batch_idx < total_images; batch_idx += batch_size) {
+
+			for (int batch_idx = 0; batch_idx < total_images; batch_idx += batch_size)
+			{
 				int current_batch_size = std::min(batch_size, total_images - batch_idx);
 				std::vector<int> batch_indices;
-				for (int i = 0; i < current_batch_size; ++i) {
+				for (int i = 0; i < current_batch_size; ++i)
+				{
 					batch_indices.push_back(start_image + batch_idx + i);
 				}
-				
-				cout << "Processing batch: frames " << batch_indices.front() 
-					<< "-" << batch_indices.back() << endl;
-				
+
+				cout << "Processing batch: frames " << batch_indices.front()
+					 << "-" << batch_indices.back() << endl;
+
 				// Call the batch version of the unified interface
-				std::vector<OptFlowMetrics> batch_results = 
+				std::vector<OptFlowMetrics> batch_results =
 					evaluator.runEvaluation(method, display_images, batch_indices);
-				
-				
-				for (const auto& result : batch_results) {
+
+				for (const auto &result : batch_results)
+				{
 					optical_method_results[method].push_back(result);
 				}
 			}
-		} else {
-			for (int i = start_image; i < start_image + total_images; ++i) {
+		}
+		else
+		{
+			for (int i = start_image; i < start_image + total_images; ++i)
+			{
 				cout << "\nOPTICAL FLOW [" << method << "] Frame #: " << i << "\n";
-				
+
 				// Call the single-frame version of the unified interface
 				std::vector<int> single_index = {i};
-				std::vector<OptFlowMetrics> single_result = 
+				std::vector<OptFlowMetrics> single_result =
 					evaluator.runEvaluation(method, display_images, single_index);
-				
-				if (!single_result.empty()) {
+
+				if (!single_result.empty())
+				{
 					optical_method_results[method].push_back(single_result[0]);
 				}
 			}
 		}
-		
-		const auto& results = optical_method_results[method];
-		if (!results.empty()) {
+
+		const auto &results = optical_method_results[method];
+		if (!results.empty())
+		{
 			cout << "\n--- Optical Flow Stats [" << method << "] ---\n";
 			cout << "# EPE      STD      0.5     1        2        3       5       10       time\n";
-			
+
 			double avg_EPE = 0, avg_std = 0, avg_R05 = 0, avg_R1 = 0, avg_R2 = 0, avg_R3 = 0, avg_R5 = 0, avg_R10 = 0, avg_time = 0;
-			
-			for (size_t j = 0; j < results.size(); j++) {
+
+			for (size_t j = 0; j < results.size(); j++)
+			{
 				const OptFlowMetrics &metrics = results[j];
-				
+
 				printf("%d %.4f %.4f %.2f %.2f %.2f %.2f %.2f %.2f %.3f\n",
-					metrics.image_no, metrics.EPE, metrics.std_dev,
-					metrics.R05, metrics.R1, metrics.R2, metrics.R3,
-					metrics.R5, metrics.R10, metrics.time_ms);
-				
+					   metrics.image_no, metrics.EPE, metrics.std_dev,
+					   metrics.R05, metrics.R1, metrics.R2, metrics.R3,
+					   metrics.R5, metrics.R10, metrics.time_ms);
+
 				avg_EPE += metrics.EPE;
 				avg_std += metrics.std_dev;
 				avg_R05 += metrics.R05;
@@ -178,7 +207,7 @@ int main(int argc, char **argv)
 				avg_R10 += metrics.R10;
 				avg_time += metrics.time_ms;
 			}
-			
+
 			size_t count = results.size();
 			cout << "\nAverages for " << method << ":\n";
 			cout << "Average EPE: " << avg_EPE / count << "\n";
@@ -195,16 +224,20 @@ int main(int argc, char **argv)
 	EvaluateSceneFlow evaluatorscene;
 	std::map<std::string, std::vector<SceneFlowMetrics>> scene_method_results;
 
-	for (const auto& method : scene_methods) {
+	for (const auto &method : scene_methods)
+	{
 		cout << "\n--- Evaluating scene flow method: " << method << " ---" << endl;
 		evaluatorscene.clearResults();
 
-		if (use_batch_processing && method == "degraf_flow_interponet") {
+		if (use_batch_processing && method == "degraf_flow_interponet")
+		{
 			cout << "Using batch processing for " << method << " (batch_size=" << batch_size << ")" << endl;
-			for (int batch_idx = 0; batch_idx < total_images; batch_idx += batch_size) {
+			for (int batch_idx = 0; batch_idx < total_images; batch_idx += batch_size)
+			{
 				int current_batch_size = std::min(batch_size, total_images - batch_idx);
 				std::vector<int> batch_indices;
-				for (int i = 0; i < current_batch_size; ++i) {
+				for (int i = 0; i < current_batch_size; ++i)
+				{
 					batch_indices.push_back(start_image + batch_idx + i);
 				}
 				std::vector<SceneFlowMetrics> batch_results =
@@ -215,17 +248,22 @@ int main(int argc, char **argv)
 					batch_results.begin(),
 					batch_results.end());
 			}
-		} else {
-			for (int i = start_image; i < start_image + total_images; ++i) {
+		}
+		else
+		{
+			for (int i = start_image; i < start_image + total_images; ++i)
+			{
 				SceneFlowMetrics result = evaluatorscene.runEvaluation(method, display_images, i);
 				scene_method_results[method].push_back(result);
 			}
 		}
 
-		const auto& results = scene_method_results[method];
-		if (!results.empty()) {
+		const auto &results = scene_method_results[method];
+		if (!results.empty())
+		{
 			double avg_EPE3d = 0, avg_AccS = 0, avg_AccR = 0, avg_Outlier = 0, avg_time = 0;
-			for (const auto &metrics : results) {
+			for (const auto &metrics : results)
+			{
 				avg_EPE3d += metrics.EPE3d;
 				avg_AccS += metrics.AccS;
 				avg_AccR += metrics.AccR;

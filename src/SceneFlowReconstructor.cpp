@@ -54,12 +54,12 @@ void SceneFlowReconstructor::setCameraParameters(float fx, float fy, float cx, f
 
 // Core function: compute 3D scene flow
 /**
-* \brief Calculates 3D scene flow
-* \param flow 2D optical flow image, type CV_32FC2
-* \param disp0 First disparity map, type CV_32F or CV_16UC1
-* \param disp1 Second disparity map (optional), type CV_32F or CV_16UC1
-* \return Returns the calculated 3D scene flow, type CV_32FC3, where each pixel is a 3D vector
-*/
+ * \brief Calculates 3D scene flow
+ * \param flow 2D optical flow image, type CV_32FC2
+ * \param disp0 First disparity map, type CV_32F or CV_16UC1
+ * \param disp1 Second disparity map (optional), type CV_32F or CV_16UC1
+ * \return Returns the calculated 3D scene flow, type CV_32FC3, where each pixel is a 3D vector
+ */
 Mat SceneFlowReconstructor::computeSceneFlow(const Mat &flow,
                                              const Mat &disp0,
                                              const Mat &disp1)
@@ -126,8 +126,8 @@ Mat SceneFlowReconstructor::computeSceneFlow(const Mat &flow,
     // Step 2: Initialize scene flow output (3D motion vectors)
     Mat sceneFlow(flow.size(), CV_32FC3, Scalar::all(0));
 
-    int valid_points = 0;                     
-    int total_points = flow.rows * flow.cols; 
+    int valid_points = 0;
+    int total_points = flow.rows * flow.cols;
 
     // Step 3: Process each pixel
     for (int v = 0; v < flow.rows; ++v)
@@ -139,21 +139,21 @@ Mat SceneFlowReconstructor::computeSceneFlow(const Mat &flow,
             float disp_t0 = disp0_f32.at<float>(v, u);
 
             // Skip invalid disparity at time t
-            if (!isValidDisparity(disp_t0)) 
+            if (!isValidDisparity(disp_t0))
             {
-                continue; 
+                continue;
             }
 
             // Step 3.1: Compute 3D position at time t
             Point3f P0 = reprojectTo3D(u, v, disp_t0);
-            if (!isValidPoint(P0)) 
+            if (!isValidPoint(P0))
             {
                 continue;
             }
 
             // Step 3.2: Calculate target pixel position using optical flow
-            int u1 = cvRound(u + flow_vec.x); 
-            int v1 = cvRound(v + flow_vec.y); 
+            int u1 = cvRound(u + flow_vec.x);
+            int v1 = cvRound(v + flow_vec.y);
 
             // Check bounds for target position
             if (u1 < 0 || u1 >= flow.cols || v1 < 0 || v1 >= flow.rows)
@@ -163,23 +163,23 @@ Mat SceneFlowReconstructor::computeSceneFlow(const Mat &flow,
 
             // Step 3.3: Get disparity at time t+1
             float disp_t1;
-            if (use_temporal_disparity) 
+            if (use_temporal_disparity)
             {
-                disp_t1 = disp1_f32.at<float>(v1, u1); 
+                disp_t1 = disp1_f32.at<float>(v1, u1);
             }
             else
             {
                 // Constant depth assumption: disp_t1 = disp_t0
-                disp_t1 = disp_t0; 
+                disp_t1 = disp_t0;
             }
 
-            if (!isValidDisparity(disp_t1)) 
+            if (!isValidDisparity(disp_t1))
             {
-                continue; 
+                continue;
             }
 
             // Step 3.4: Compute 3D position at time t+1
-            Point3f P1 = reprojectTo3D(u1, v1, disp_t1); 
+            Point3f P1 = reprojectTo3D(u1, v1, disp_t1);
             if (!isValidPoint(P1))
             {
                 continue;
