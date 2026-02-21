@@ -7,6 +7,7 @@
 #include "EvaluateOptFlow.h"
 #include "FeatureMatcher.h"
 #include <cstdlib>
+#include <fstream>
 
 using namespace std;
 using namespace cv;
@@ -69,6 +70,21 @@ static String getDataSceneFlowRoot()
     if (env_path && std::string(env_path).size() > 0)
         return String(env_path);
     return String("/root/autodl-tmp/data/kitti/data_scene_flow");
+}
+
+static std::string getKittiProtocol()
+{
+	const char *env_protocol = std::getenv("DEGRAF_KITTI_PROTOCOL");
+	if (!env_protocol) return "occ";
+	std::string protocol(env_protocol);
+	if (protocol == "noc") return "noc";
+	return "occ";
+}
+
+static bool fileExists(const std::string &path)
+{
+	std::ifstream f(path.c_str());
+	return f.good();
 }
 
 EvaluateOptFlow::EvaluateOptFlow()
@@ -477,7 +493,12 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
         String base_dir = data_root + "/training/";
         data.i1_path = base_dir + "image_2/" + data.num_str + "_10.png";
         data.i2_path = base_dir + "image_2/" + data.num_str + "_11.png";
-        data.groundtruth_path = base_dir + "flow_noc/" + data.num_str + "_10.png";
+        const std::string protocol = getKittiProtocol();
+        const std::string flow_pref = std::string("flow_") + protocol + "/" + std::string(data.num_str) + "_10.png";
+        const std::string flow_alt = std::string("flow_") + (protocol == "occ" ? "noc" : "occ") + "/" + std::string(data.num_str) + "_10.png";
+        std::string flow_path = std::string(base_dir) + flow_pref;
+        if (!fileExists(flow_path)) flow_path = std::string(base_dir) + flow_alt;
+        data.groundtruth_path = flow_path;
 
         data.i1 = imread(data.i1_path, 1);
         data.i2 = imread(data.i2_path, 1);
@@ -623,13 +644,22 @@ std::vector<OptFlowMetrics> EvaluateOptFlow::runEvaluation(const String &method,
             }
             else if (method == "degraf_flow_interponet")
             {
-                // Single frame InterpoNet redirects to RLOF
                 FeatureMatcher algo;
-                algo.degraf_flow_RLOF(data.i1, data.i2, flow, 127, (0.05000000075F), true, (500.0F), (1.5F), data.num_str);
-                if (display_images)
-                {
-                    batch_points1[i] = algo.points_filtered;
-                    batch_points2[i] = algo.dst_points_filtered;
+                std::vector<cv::Mat> one_i1 = {data.i1};
+                std::vector<cv::Mat> one_i2 = {data.i2};
+                std::vector<std::string> one_num = {std::string(data.num_str)};
+                std::vector<std::vector<Point2f>> one_points, one_dst_points;
+                std::vector<cv::Mat> one_flow = algo.degraf_flow_InterpoNet(
+                    one_i1, one_i2, one_num,
+                    display_images ? &one_points : nullptr,
+                    display_images ? &one_dst_points : nullptr
+                );
+                if (!one_flow.empty()) {
+                    flow = one_flow[0];
+                }
+                if (display_images && !one_points.empty() && !one_dst_points.empty()) {
+                    batch_points1[i] = one_points[0];
+                    batch_points2[i] = one_dst_points[0];
                 }
             }
             else

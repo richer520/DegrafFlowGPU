@@ -152,11 +152,12 @@ Mat SceneFlowReconstructor::computeSceneFlow(const Mat &flow,
             }
 
             // Step 3.2: Calculate target pixel position using optical flow
-            int u1 = cvRound(u + flow_vec.x);
-            int v1 = cvRound(v + flow_vec.y);
+            float u1 = static_cast<float>(u) + flow_vec.x;
+            float v1 = static_cast<float>(v) + flow_vec.y;
 
             // Check bounds for target position
-            if (u1 < 0 || u1 >= flow.cols || v1 < 0 || v1 >= flow.rows)
+            if (u1 < 0.0f || u1 > static_cast<float>(flow.cols - 1) ||
+                v1 < 0.0f || v1 > static_cast<float>(flow.rows - 1))
             {
                 continue;
             }
@@ -165,7 +166,10 @@ Mat SceneFlowReconstructor::computeSceneFlow(const Mat &flow,
             float disp_t1;
             if (use_temporal_disparity)
             {
-                disp_t1 = disp1_f32.at<float>(v1, u1);
+                if (!sampleDisparityBilinear(disp1_f32, u1, v1, disp_t1))
+                {
+                    continue;
+                }
             }
             else
             {
@@ -203,6 +207,11 @@ Mat SceneFlowReconstructor::computeSceneFlow(const Mat &flow,
 // Helper function: reproject 2D pixel + disparity to 3D point
 Point3f SceneFlowReconstructor::reprojectTo3D(int u, int v, float disparity) const
 {
+    return reprojectTo3D(static_cast<float>(u), static_cast<float>(v), disparity);
+}
+
+Point3f SceneFlowReconstructor::reprojectTo3D(float u, float v, float disparity) const
+{
     if (disparity <= 0.0f)
     {
         return Point3f(0, 0, 0); // Invalid point
@@ -212,6 +221,44 @@ Point3f SceneFlowReconstructor::reprojectTo3D(int u, int v, float disparity) con
     float Y = (v - cy_) * Z / fy_;
 
     return Point3f(X, Y, Z);
+}
+
+bool SceneFlowReconstructor::sampleDisparityBilinear(const cv::Mat &disp, float u, float v, float &value) const
+{
+    if (disp.empty() || disp.type() != CV_32F) return false;
+    if (u < 0.0f || v < 0.0f || u > static_cast<float>(disp.cols - 1) || v > static_cast<float>(disp.rows - 1)) {
+        return false;
+    }
+
+    const int x0 = static_cast<int>(std::floor(u));
+    const int y0 = static_cast<int>(std::floor(v));
+    const int x1 = std::min(x0 + 1, disp.cols - 1);
+    const int y1 = std::min(y0 + 1, disp.rows - 1);
+
+    const float dx = u - static_cast<float>(x0);
+    const float dy = v - static_cast<float>(y0);
+
+    const float w00 = (1.0f - dx) * (1.0f - dy);
+    const float w10 = dx * (1.0f - dy);
+    const float w01 = (1.0f - dx) * dy;
+    const float w11 = dx * dy;
+
+    const float d00 = disp.at<float>(y0, x0);
+    const float d10 = disp.at<float>(y0, x1);
+    const float d01 = disp.at<float>(y1, x0);
+    const float d11 = disp.at<float>(y1, x1);
+
+    float weighted_sum = 0.0f;
+    float weight_sum = 0.0f;
+
+    if (isValidDisparity(d00)) { weighted_sum += w00 * d00; weight_sum += w00; }
+    if (isValidDisparity(d10)) { weighted_sum += w10 * d10; weight_sum += w10; }
+    if (isValidDisparity(d01)) { weighted_sum += w01 * d01; weight_sum += w01; }
+    if (isValidDisparity(d11)) { weighted_sum += w11 * d11; weight_sum += w11; }
+
+    if (weight_sum <= 1e-6f) return false;
+    value = weighted_sum / weight_sum;
+    return true;
 }
 
 // Helper function: validate disparity value

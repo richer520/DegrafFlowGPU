@@ -45,6 +45,8 @@ private:
 
     // Core computation helper functions - kept here
     cv::Point3f reprojectTo3D(int u, int v, float disparity) const;
+    cv::Point3f reprojectTo3D(float u, float v, float disparity) const;
+    bool sampleDisparityBilinear(const cv::Mat &disp, float u, float v, float &value) const;
     bool isValidDisparity(float disparity) const;
     bool isValidPoint(const cv::Point3f &point) const;
 
