@@ -297,8 +297,7 @@ SceneFlowMetrics EvaluateSceneFlow::calculateStandardMetrics(const cv::Mat &pred
                         acc_strict_count++;
                     if (epe < 0.1f || rel_err < 0.1f)
                         acc_relax_count++;
-                    // Follow KITTI-style outlier logic: both absolute and relative thresholds must fail.
-                    if (epe > 0.3f && rel_err > 0.1f)
+                    if (epe > 0.3f || rel_err > 0.1f)
                         outlier_count++;
                 }
                 else
