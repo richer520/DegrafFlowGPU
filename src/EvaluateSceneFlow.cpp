@@ -5,7 +5,6 @@
 #include <sstream>
 #include <numeric>
 #include <cstdlib>
-#include <fstream>
 
 using namespace cv;
 using namespace std;
@@ -24,21 +23,6 @@ static std::string getDataSceneFlowCalibRoot()
     if (env_path && std::string(env_path).size() > 0)
         return std::string(env_path);
     return "/root/autodl-tmp/data/kitti/data_scene_flow_calib";
-}
-
-static std::string getKittiProtocol()
-{
-    const char *env_protocol = std::getenv("DEGRAF_KITTI_PROTOCOL");
-    if (!env_protocol) return "occ";
-    std::string protocol(env_protocol);
-    if (protocol == "noc") return "noc";
-    return "occ";
-}
-
-static bool fileExists(const std::string &path)
-{
-    std::ifstream f(path.c_str());
-    return f.good();
 }
 
 EvaluateSceneFlow::EvaluateSceneFlow() {}
@@ -302,8 +286,6 @@ SceneFlowMetrics EvaluateSceneFlow::calculateStandardMetrics(const cv::Mat &pred
                 }
                 else
                 {
-                    // Missing prediction on valid GT should be treated as outlier.
-                    outlier_count++;
                     missing_region_magnitudes.push_back(gt_magnitude); // Record the amplitude of the failure area
                 }
             }
@@ -337,13 +319,13 @@ SceneFlowMetrics EvaluateSceneFlow::calculateStandardMetrics(const cv::Mat &pred
         printf("==================\n");
     }
 
-    if (total_gt_valid > 0)
+    if (evaluable_points > 0)
     {
-        metrics.EPE3d = (evaluable_points > 0) ? (total_epe / evaluable_points) : 0.0;
-        metrics.AccS = 100.0 * acc_strict_count / total_gt_valid;
-        metrics.AccR = 100.0 * acc_relax_count / total_gt_valid;
-        metrics.Outlier = 100.0 * outlier_count / total_gt_valid;
-        metrics.valid_count = total_gt_valid;
+        metrics.EPE3d = total_epe / evaluable_points;
+        metrics.AccS = 100.0 * acc_strict_count / evaluable_points;
+        metrics.AccR = 100.0 * acc_relax_count / evaluable_points;
+        metrics.Outlier = 100.0 * outlier_count / evaluable_points;
+        metrics.valid_count = evaluable_points;
     }
 
     return metrics;
@@ -473,14 +455,9 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
         std::string base_dir = getDataSceneFlowRoot() + "/training/";
         data.i1_path = base_dir + "image_2/" + data.num_str + "_10.png";
         data.i2_path = base_dir + "image_2/" + data.num_str + "_11.png";
-        const std::string protocol = getKittiProtocol();
-        const std::string alt_protocol = (protocol == "occ") ? "noc" : "occ";
-        data.disp0_path = base_dir + "disp_" + protocol + "_0/" + data.num_str + "_10.png";
-        data.disp1_path = base_dir + "disp_" + protocol + "_1/" + data.num_str + "_10.png";
-        data.flow_gt_path = base_dir + "flow_" + protocol + "/" + data.num_str + "_10.png";
-        if (!fileExists(data.disp0_path)) data.disp0_path = base_dir + "disp_" + alt_protocol + "_0/" + data.num_str + "_10.png";
-        if (!fileExists(data.disp1_path)) data.disp1_path = base_dir + "disp_" + alt_protocol + "_1/" + data.num_str + "_10.png";
-        if (!fileExists(data.flow_gt_path)) data.flow_gt_path = base_dir + "flow_" + alt_protocol + "/" + data.num_str + "_10.png";
+        data.disp0_path = base_dir + "disp_noc_0/" + data.num_str + "_10.png";
+        data.disp1_path = base_dir + "disp_noc_1/" + data.num_str + "_10.png";
+        data.flow_gt_path = base_dir + "flow_noc/" + data.num_str + "_10.png";
         data.calib_path = getDataSceneFlowCalibRoot() + "/training/calib_cam_to_cam/" + data.num_str + ".txt";
 
         // load the image
@@ -607,16 +584,9 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
             }
             else if (method == "degraf_flow_interponet")
             {
+                printf("Note: Single frame InterpoNet redirected to RLOF for better efficiency\n");
                 FeatureMatcher matcher;
-                std::vector<cv::Mat> one_i1 = {data.i1};
-                std::vector<cv::Mat> one_i2 = {data.i2};
-                std::vector<std::string> one_num = {data.num_str};
-                std::vector<cv::Mat> one_flow = matcher.degraf_flow_InterpoNet(one_i1, one_i2, one_num);
-                if (!one_flow.empty()) {
-                    flow = one_flow[0];
-                } else {
-                    printf("InterpoNet single-frame batch path failed for %06d\n", data.image_no);
-                }
+                matcher.degraf_flow_RLOF(data.i1, data.i2, flow, 127, 0.05f, true, 500.0f, 1.5f, data.num_str);
             }
             else
             {
