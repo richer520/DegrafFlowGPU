@@ -136,6 +136,10 @@ Mat SceneFlowReconstructor::computeSceneFlow(const Mat &flow,
         {
             // Step 3.0: Get the optical flow vector
             Point2f flow_vec = flow.at<Point2f>(v, u);
+            if (!std::isfinite(flow_vec.x) || !std::isfinite(flow_vec.y))
+            {
+                continue;
+            }
             float disp_t0 = disp0_f32.at<float>(v, u);
 
             // Skip invalid disparity at time t
@@ -226,6 +230,7 @@ Point3f SceneFlowReconstructor::reprojectTo3D(float u, float v, float disparity)
 bool SceneFlowReconstructor::sampleDisparityBilinear(const cv::Mat &disp, float u, float v, float &value) const
 {
     if (disp.empty() || disp.type() != CV_32F) return false;
+    if (!std::isfinite(u) || !std::isfinite(v)) return false;
     if (u < 0.0f || v < 0.0f || u > static_cast<float>(disp.cols - 1) || v > static_cast<float>(disp.rows - 1)) {
         return false;
     }
