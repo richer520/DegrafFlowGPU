@@ -48,6 +48,18 @@ inline std::string getInterpoNetEdgeModelPath()
 	return getProjectRoot() + "/external/InterpoNet/model.yml";
 }
 
+inline bool useLegacyContainerPaths()
+{
+	const char *env_flag = std::getenv("DEGRAF_LEGACY_CONTAINER_PATHS");
+	if (env_flag)
+	{
+		const std::string flag(env_flag);
+		if (flag == "1" || flag == "true" || flag == "TRUE" || flag == "yes" || flag == "YES")
+			return true;
+	}
+	return false;
+}
+
 inline cv::Ptr<cv::Feature2D> createSiftDetector(int nfeatures, int nOctaveLayers,
                                                   double contrastThreshold, double edgeThreshold,
                                                   double sigma) {
@@ -549,6 +561,7 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
 
 	// Pre-create all necessary folders
 	std::string project_root = getProjectRoot();
+	const bool legacy_container_paths = useLegacyContainerPaths();
 	std::string raft_base_path = project_root + "/external/RAFT/data/degraf_input/";
 	std::string raft_images_folder = raft_base_path + "degraf_images/";
 	std::string raft_points_folder = raft_base_path + "degraf_points/";
@@ -689,10 +702,20 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
 			cv::imwrite(img2_path, batch_i2[idx]);
 		}
 
-		raft_img1_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_10.png");
-		raft_img2_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_11.png");
-		raft_points_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_points/" + num_str + "_points.txt");
-		raft_matches_paths.push_back(project_root + "/external/RAFT/data/raft_matches/" + num_str + "_matches.txt");
+		if (legacy_container_paths)
+		{
+			raft_img1_paths.push_back("/app/data/degraf_input/degraf_images/" + num_str + "_10.png");
+			raft_img2_paths.push_back("/app/data/degraf_input/degraf_images/" + num_str + "_11.png");
+			raft_points_paths.push_back("/app/data/degraf_input/degraf_points/" + num_str + "_points.txt");
+			raft_matches_paths.push_back("/app/data/raft_matches/" + num_str + "_matches.txt");
+		}
+		else
+		{
+			raft_img1_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_10.png");
+			raft_img2_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_11.png");
+			raft_points_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_points/" + num_str + "_points.txt");
+			raft_matches_paths.push_back(project_root + "/external/RAFT/data/raft_matches/" + num_str + "_matches.txt");
+		}
 
 		// Save the local path for subsequent reading
 		local_matches_paths.push_back(project_root + "/external/RAFT/data/raft_matches/" + num_str + "_matches.txt");
@@ -782,11 +805,22 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
 			FlowUtils::save_edge_dat(edges, edges_dat_path);
 		}
 
-		interponet_img1_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_10.png");
-		interponet_img2_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_11.png");
-		interponet_edges_paths.push_back(project_root + "/external/InterpoNet/data/interponet_input/" + num_str + "_edges.dat");
-		interponet_matches_paths.push_back(project_root + "/external/RAFT/data/raft_matches/" + num_str + "_matches.txt");
-		interponet_output_paths.push_back(project_root + "/external/InterpoNet/data/interponet_output/" + num_str + "_output.flo");
+		if (legacy_container_paths)
+		{
+			interponet_img1_paths.push_back("/app/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_10.png");
+			interponet_img2_paths.push_back("/app/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_11.png");
+			interponet_edges_paths.push_back("/app/external/InterpoNet/data/interponet_input/" + num_str + "_edges.dat");
+			interponet_matches_paths.push_back("/app/external/RAFT/data/raft_matches/" + num_str + "_matches.txt");
+			interponet_output_paths.push_back("/app/external/InterpoNet/data/interponet_output/" + num_str + "_output.flo");
+		}
+		else
+		{
+			interponet_img1_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_10.png");
+			interponet_img2_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_11.png");
+			interponet_edges_paths.push_back(project_root + "/external/InterpoNet/data/interponet_input/" + num_str + "_edges.dat");
+			interponet_matches_paths.push_back(project_root + "/external/RAFT/data/raft_matches/" + num_str + "_matches.txt");
+			interponet_output_paths.push_back(project_root + "/external/InterpoNet/data/interponet_output/" + num_str + "_output.flo");
+		}
 	}
 
 	auto edge_end = std::chrono::high_resolution_clock::now();
