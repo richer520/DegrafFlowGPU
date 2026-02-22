@@ -35,4 +35,5 @@ mkdir -p "${DEGRAF_PROJECT_ROOT}/data/outputs"
 cd "${DEGRAF_PROJECT_ROOT}/build_gpu"
 cmake .. -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75
 make -j"$(nproc)"
-./degraf_flow
+echo "[INFO] degraf_flow args: $*"
+./degraf_flow "$@"
