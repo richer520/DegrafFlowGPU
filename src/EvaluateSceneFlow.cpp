@@ -27,6 +27,7 @@ static std::string getDataSceneFlowCalibRoot()
 
 EvaluateSceneFlow::EvaluateSceneFlow() {}
 
+
 /**
  * Function: Parse fx, fy, cx, cy, baseline from KITTI calib_cam_to_cam/*.txt files
  * Input parameters:
@@ -96,25 +97,25 @@ static bool loadCameraIntrinsics(const std::string &calib_file, float &fx, float
 static Mat convertToKittiFlow(const Mat_<Point2f> &flow)
 {
 
-    Mat kittiFlow = cv::Mat::ones(flow.rows, flow.cols, CV_16UC3); // type 18
+	Mat kittiFlow = cv::Mat::ones(flow.rows, flow.cols, CV_16UC3); // type 18
 
-    int width = flow.cols;
-    int height = flow.rows;
-    for (int i = 0; i < height; ++i)
-    {
-        for (int j = 0; j < width; ++j)
-        {
+	int width = flow.cols;
+	int height = flow.rows;
+	for (int i = 0; i < height; ++i)
+	{
+		for (int j = 0; j < width; ++j)
+		{
 
-            const Point2f pt = flow(i, j);
-            float u = pt.x;
-            float v = pt.y;
+			const Point2f pt = flow(i, j);
+			float u = pt.x;
+			float v = pt.y;
 
-            kittiFlow.at<Vec3s>(i, j)[1] = (uint16_t)max(min(v * 64.0f + 32768.0f, 65535.0f), 0.0f);
+			kittiFlow.at<Vec3s>(i, j)[1] = (uint16_t)max(min(v * 64.0f + 32768.0f, 65535.0f), 0.0f);
 
-            kittiFlow.at<Vec3s>(i, j)[2] = (uint16_t)max(min(u * 64.0f + 32768.0f, 65535.0f), 0.0f);
-        }
-    }
-    return kittiFlow;
+			kittiFlow.at<Vec3s>(i, j)[2] = (uint16_t)max(min(u * 64.0f + 32768.0f, 65535.0f), 0.0f);
+		}
+	}
+	return kittiFlow;
 }
 
 /**
@@ -222,6 +223,7 @@ static cv::Mat readKITTIFlowGT(const std::string &ground_truth_path)
     return gt;
 }
 
+
 // Standard indicator calculation
 SceneFlowMetrics EvaluateSceneFlow::calculateStandardMetrics(const cv::Mat &pred_scene_flow,
                                                              const cv::Mat &gt_scene_flow)
@@ -265,7 +267,7 @@ SceneFlowMetrics EvaluateSceneFlow::calculateStandardMetrics(const cv::Mat &pred
                 if (pred_valid)
                 {
                     evaluable_points++;
-                    covered_region_magnitudes.push_back(gt_magnitude); // Record the coverage area amplitude
+                    covered_region_magnitudes.push_back(gt_magnitude); //Record the coverage area amplitude
 
                     float dx = pred[0] - gt[0];
                     float dy = pred[1] - gt[1];
@@ -286,7 +288,7 @@ SceneFlowMetrics EvaluateSceneFlow::calculateStandardMetrics(const cv::Mat &pred
                 }
                 else
                 {
-                    missing_region_magnitudes.push_back(gt_magnitude); // Record the amplitude of the failure area
+                    missing_region_magnitudes.push_back(gt_magnitude); //Record the amplitude of the failure area
                 }
             }
         }
@@ -368,27 +370,26 @@ void EvaluateSceneFlow::writeMetricsToCSV(const SceneFlowMetrics &metrics,
     file.close();
 }
 
+
+
 void EvaluateSceneFlow::exportSceneFlowComparisonCSV(
-    const std::string &csv_path,
-    const std::map<std::string, std::vector<SceneFlowMetrics>> &method_results)
+    const std::string& csv_path,
+    const std::map<std::string, std::vector<SceneFlowMetrics>>& method_results)
 {
     std::ofstream file(csv_path, std::ios::trunc);
-    if (!file.is_open())
-        return;
-
+    if (!file.is_open()) return;
+    
     file << "Method,EPE3d(m),AccS(%),AccR(%),Outlier(%),Runtime(ms)\n";
-
-    for (const auto &method_pair : method_results)
-    {
-        const std::string &method_name = method_pair.first;
-        const std::vector<SceneFlowMetrics> &results = method_pair.second;
-
-        if (!results.empty())
-        {
+    
+    
+    for (const auto& method_pair : method_results) {
+        const std::string& method_name = method_pair.first;
+        const std::vector<SceneFlowMetrics>& results = method_pair.second;
+        
+        if (!results.empty()) {
             // Calculate the average
             double avg_EPE3d = 0, avg_AccS = 0, avg_AccR = 0, avg_Outlier = 0, avg_time = 0;
-            for (const auto &metrics : results)
-            {
+            for (const auto& metrics : results) {
                 avg_EPE3d += metrics.EPE3d;
                 avg_AccS += metrics.AccS;
                 avg_AccR += metrics.AccR;
@@ -396,37 +397,36 @@ void EvaluateSceneFlow::exportSceneFlowComparisonCSV(
                 avg_time += metrics.time_ms;
             }
             size_t count = results.size();
-
+            
             // Write the average value of this method
-            file << method_name << "+Disp," << avg_EPE3d / count << "," << avg_AccS / count << ","
-                 << avg_AccR / count << "," << avg_Outlier / count << "," << avg_time / count << "\n";
+            file << method_name << "+Disp," << avg_EPE3d/count << "," << avg_AccS/count << "," 
+                 << avg_AccR/count << "," << avg_Outlier/count << "," << avg_time/count << "\n";
         }
     }
     file.close();
 }
 
 /**
- * @brief Unified scene flow evaluation entry point function - replaces the original runEvaluation and runEvaluationBatch
- * @param method Optical flow method name
- * @param display_images Display visualization function
- * @param image_indices Image index array (for single frame, pass {i}; for batch, pass {i1,i2,...})
- * @return Evaluation result array
- */
+* @brief Unified scene flow evaluation entry point function - replaces the original runEvaluation and runEvaluationBatch
+* @param method Optical flow method name
+* @param display_images Display visualization function
+* @param image_indices Image index array (for single frame, pass {i}; for batch, pass {i1,i2,...})
+* @return Evaluation result array
+*/
 std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
     const std::string &method,
     bool display_images,
     const std::vector<int> &image_indices)
 {
     std::vector<SceneFlowMetrics> results;
-
+    
     // Determine whether true batch processing is supported
     bool is_batch_capable = (method == "degraf_flow_interponet");
-
+    
     // =====================================================
     // Step 1: Data preparation
     // =====================================================
-    struct ImagePairData
-    {
+    struct ImagePairData {
         cv::Mat i1, i2;
         cv::Mat gray1, gray2;
         std::string i1_path, i2_path;
@@ -437,21 +437,20 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
         float fx, fy, cx, cy, baseline;
         int image_no;
     };
-
+    
     std::vector<ImagePairData> batch_data;
     batch_data.reserve(image_indices.size());
-
+    
     // load all data
-    for (int image_no : image_indices)
-    {
+    for (int image_no : image_indices) {
         ImagePairData data;
         data.image_no = image_no;
-
+        
         // Path construction
         char num[7];
         sprintf(num, "%06d", image_no);
         data.num_str = std::string(num);
-
+        
         std::string base_dir = getDataSceneFlowRoot() + "/training/";
         data.i1_path = base_dir + "image_2/" + data.num_str + "_10.png";
         data.i2_path = base_dir + "image_2/" + data.num_str + "_11.png";
@@ -459,41 +458,38 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
         data.disp1_path = base_dir + "disp_noc_1/" + data.num_str + "_10.png";
         data.flow_gt_path = base_dir + "flow_noc/" + data.num_str + "_10.png";
         data.calib_path = getDataSceneFlowCalibRoot() + "/training/calib_cam_to_cam/" + data.num_str + ".txt";
-
+        
         // load the image
         data.i1 = cv::imread(data.i1_path, 1);
         data.i2 = cv::imread(data.i2_path, 1);
         cv::Mat disp0 = cv::imread(data.disp0_path, cv::IMREAD_UNCHANGED);
         cv::Mat disp1 = cv::imread(data.disp1_path, cv::IMREAD_UNCHANGED);
         cv::Mat flow_gt = cv::imread(data.flow_gt_path, cv::IMREAD_UNCHANGED);
-
+        
         // Verify data
-        if (data.i1.empty() || data.i2.empty() || disp0.empty() || disp1.empty() || flow_gt.empty())
-        {
+        if (data.i1.empty() || data.i2.empty() || disp0.empty() || disp1.empty() || flow_gt.empty()) {
             printf("❌ Input missing %06d\n", image_no);
             continue;
         }
-        if (data.i1.size() != data.i2.size() || data.i1.size() != disp0.size() ||
-            disp0.size() != disp1.size() || data.i1.size() != flow_gt.size())
-        {
+        if (data.i1.size() != data.i2.size() || data.i1.size() != disp0.size() || 
+            disp0.size() != disp1.size() || data.i1.size() != flow_gt.size()) {
             printf("❌ Size mismatch %06d\n", image_no);
             continue;
         }
-
+        
         // Preprocess grayscale image
         if (data.i1.channels() == 3)
             cv::cvtColor(data.i1, data.gray1, cv::COLOR_BGR2GRAY);
         else
             data.gray1 = data.i1.clone();
-
+        
         if (data.i2.channels() == 3)
             cv::cvtColor(data.i2, data.gray2, cv::COLOR_BGR2GRAY);
         else
             data.gray2 = data.i2.clone();
-
+        
         // Load calibration parameters
-        if (!loadCameraIntrinsics(data.calib_path, data.fx, data.fy, data.cx, data.cy, data.baseline))
-        {
+        if (!loadCameraIntrinsics(data.calib_path, data.fx, data.fy, data.cx, data.cy, data.baseline)) {
             data.fx = 721.5377f;
             data.fy = 721.5377f;
             data.cx = 609.5593f;
@@ -501,66 +497,60 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
             data.baseline = 0.5371f;
             printf("Using default KITTI camera parameters for %06d\n", image_no);
         }
-
+        
         batch_data.push_back(data);
     }
-
-    if (batch_data.empty())
-    {
+    
+    if (batch_data.empty()) {
         return results;
     }
-
+    
     // =====================================================
     // Step 2: Optical flow calculation (select batch or frame by frame depending on the method)
     // =====================================================
     std::vector<cv::Mat> batch_flows;
     std::vector<double> individual_times;
-
-    if (is_batch_capable && batch_data.size() > 1)
-    {
+    
+    if (is_batch_capable && batch_data.size() > 1) {
         // InterpoNet batch processing
         std::vector<cv::Mat> batch_i1, batch_i2;
         std::vector<std::string> batch_num_strs;
-
-        for (const auto &data : batch_data)
-        {
+        
+        for (const auto& data : batch_data) {
             batch_i1.push_back(data.i1);
             batch_i2.push_back(data.i2);
             batch_num_strs.push_back(data.num_str);
         }
-
+        
         double batch_start = cv::getTickCount();
         FeatureMatcher matcher;
-
+        
         // Call the batch version to get feature points for visualization (if necessary)
         std::vector<std::vector<cv::Point2f>> batch_points, batch_dst_points;
         batch_flows = matcher.degraf_flow_InterpoNet(
             batch_i1, batch_i2, batch_num_strs,
-            display_images ? &batch_points : nullptr,
-            display_images ? &batch_dst_points : nullptr);
-
+            display_images ? &batch_points : nullptr,      
+            display_images ? &batch_dst_points : nullptr
+        );
+        
         double total_time_ms = (cv::getTickCount() - batch_start) / cv::getTickFrequency() * 1000.0;
-
+        
         // When batch processing, the time per frame is the average time
-        for (size_t i = 0; i < batch_flows.size(); ++i)
-        {
+        for (size_t i = 0; i < batch_flows.size(); ++i) {
             individual_times.push_back(total_time_ms / batch_flows.size());
         }
-    }
-    else
-    {
+    } else {
         // Process frame by frame (can be parallelized)
         batch_flows.resize(batch_data.size());
         individual_times.resize(batch_data.size());
-
-#pragma omp parallel for
-        for (size_t i = 0; i < batch_data.size(); ++i)
-        {
-            const auto &data = batch_data[i];
+        
+        #pragma omp parallel for
+        for (size_t i = 0; i < batch_data.size(); ++i) {
+            const auto& data = batch_data[i];
             cv::Mat flow;
-
+            
             double single_start = cv::getTickCount();
-
+            
             // Optical flow estimation
             if (method == "farneback")
                 cv::optflow::createOptFlow_Farneback()->calc(data.gray1, data.gray2, flow);
@@ -572,105 +562,97 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
                 cv::DISOpticalFlow::create(cv::DISOpticalFlow::PRESET_FAST)->calc(data.gray1, data.gray2, flow);
             else if (method == "DISflow_medium")
                 cv::DISOpticalFlow::create(cv::DISOpticalFlow::PRESET_MEDIUM)->calc(data.gray1, data.gray2, flow);
-            else if (method == "degraf_flow_rlof")
-            {
+            else if (method == "degraf_flow_rlof") {
                 FeatureMatcher matcher;
                 matcher.degraf_flow_RLOF(data.i1, data.i2, flow, 127, 0.05f, true, 500.0f, 1.5f, data.num_str);
             }
-            else if (method == "degraf_flow_lk")
-            {
+            else if (method == "degraf_flow_lk") {
                 FeatureMatcher matcher;
                 matcher.degraf_flow_LK(data.i1, data.i2, flow, 127, 0.05f, true, 500.0f, 1.5f, data.num_str);
             }
-            else if (method == "degraf_flow_interponet")
-            {
+            else if (method == "degraf_flow_interponet") {
                 printf("Note: Single frame InterpoNet redirected to RLOF for better efficiency\n");
                 FeatureMatcher matcher;
                 matcher.degraf_flow_RLOF(data.i1, data.i2, flow, 127, 0.05f, true, 500.0f, 1.5f, data.num_str);
             }
-            else
-            {
+            else {
                 printf("❌ Unknown optical flow method: %s\n", method.c_str());
             }
-
+            
             double single_time = (cv::getTickCount() - single_start) / cv::getTickFrequency() * 1000.0;
-
-#pragma omp critical
+            
+            #pragma omp critical
             {
                 batch_flows[i] = flow;
                 individual_times[i] = single_time;
             }
         }
     }
-
+    
     // =====================================================
     // Step 3: Scene flow reconstruction and evaluation
     // =====================================================
-    std::string csv_path = (batch_data.size() > 1) ? "../data/outputs/batch_scene_flow_results.csv" : "../data/outputs/scene_flow_results.csv";
-
+    std::string csv_path = (batch_data.size() > 1) ? 
+        "../data/outputs/batch_scene_flow_results.csv" : 
+        "../data/outputs/scene_flow_results.csv";
+    
     // Write the first frame into the header
-    if (batch_data[0].image_no == 0 || (batch_data.size() > 1 && batch_data[0].image_no == image_indices[0]))
-    {
+    if (batch_data[0].image_no == 0 || (batch_data.size() > 1 && batch_data[0].image_no == image_indices[0])) {
         std::ofstream header_file(csv_path, std::ios::trunc);
         header_file << "image_no,method,EPE3d,AccS(%),AccR(%),Outlier(%),valid_count,time_ms\n";
         header_file.close();
     }
-
-    for (size_t i = 0; i < batch_data.size(); ++i)
-    {
-        const auto &data = batch_data[i];
-        const cv::Mat &flow = batch_flows[i];
-
-        if (flow.empty())
-        {
+    
+    for (size_t i = 0; i < batch_data.size(); ++i) {
+        const auto& data = batch_data[i];
+        const cv::Mat& flow = batch_flows[i];
+        
+        if (flow.empty()) {
             printf("❌ Optical flow calculation failed %06d\n", data.image_no);
             continue;
         }
-
+        
         // Scene flow reconstruction
         cv::Mat disp0_f32 = readKITTIDisparity(data.disp0_path);
         cv::Mat disp1_f32 = readKITTIDisparity(data.disp1_path);
-
+        
         SceneFlowReconstructor reconstructor(data.fx, data.fy, data.cx, data.cy, data.baseline);
         cv::Mat scene_flow = reconstructor.computeSceneFlow(flow, disp0_f32, disp1_f32);
-
-        if (scene_flow.empty())
-        {
+        
+        if (scene_flow.empty()) {
             printf("Scene flow calculation failed %06d\n", data.image_no);
             continue;
         }
-
+        
         // Read GT
         cv::Mat flow_gt_processed = readKITTIFlowGT(data.flow_gt_path);
         cv::Mat gt_scene_flow = reconstructor.computeSceneFlow(flow_gt_processed, disp0_f32, disp1_f32);
-
-        if (gt_scene_flow.empty() || gt_scene_flow.type() != CV_32FC3)
-        {
+        
+        if (gt_scene_flow.empty() || gt_scene_flow.type() != CV_32FC3) {
             printf("GT Scene Flow reading failed %06d\n", data.image_no);
             continue;
         }
+        
 
         SceneFlowMetrics metrics = evaluateSingleFrame(scene_flow, gt_scene_flow, true);
         metrics.time_ms = individual_times[i];
-
+        
         writeMetricsToCSV(metrics, method, data.image_no, csv_path);
-
+        
         results.push_back(metrics);
         all_results_.push_back(metrics);
-
+        
         printf("Frame %06d evaluated successfully\n", data.image_no);
     }
-
+    
     // =====================================================
     // Step 4: Add average value when batch processing
     // =====================================================
-    if (batch_data.size() > 1 && !results.empty())
-    {
+    if (batch_data.size() > 1 && !results.empty()) {
         double avg_EPE3d = 0, avg_AccS = 0, avg_AccR = 0, avg_Outlier = 0, avg_time = 0;
         int total_valid = 0;
-
-        for (const auto &metrics : results)
-        {
+        
+        for (const auto& metrics : results) {
             avg_EPE3d += metrics.EPE3d;
             avg_AccS += metrics.AccS;
             avg_AccR += metrics.AccR;
@@ -678,7 +660,7 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
             avg_time += metrics.time_ms;
             total_valid += metrics.valid_count;
         }
-
+        
         size_t count = results.size();
         avg_EPE3d /= count;
         avg_AccS /= count;
@@ -686,10 +668,9 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
         avg_Outlier /= count;
         avg_time /= count;
         int avg_valid = total_valid / count;
-
+        
         std::ofstream file(csv_path, std::ios::app);
-        if (file.is_open())
-        {
+        if (file.is_open()) {
             file << "AVERAGE," << method << ","
                  << avg_EPE3d << "," << avg_AccS << "," << avg_AccR << ","
                  << avg_Outlier << "," << avg_valid << "," << avg_time << "\n";
@@ -701,8 +682,8 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
 }
 
 /**
- * @brief Convenience overload - single-frame interface for backward compatibility
- */
+* @brief Convenience overload - single-frame interface for backward compatibility
+*/
 SceneFlowMetrics EvaluateSceneFlow::runEvaluation(
     const std::string &method,
     bool display_images,
@@ -710,13 +691,10 @@ SceneFlowMetrics EvaluateSceneFlow::runEvaluation(
 {
     std::vector<int> indices = {image_no};
     std::vector<SceneFlowMetrics> results = runEvaluation(method, display_images, indices);
-
-    if (!results.empty())
-    {
+    
+    if (!results.empty()) {
         return results[0];
-    }
-    else
-    {
-        return SceneFlowMetrics(); // Returns an empty result of the default construction
+    } else {
+        return SceneFlowMetrics();  // Returns an empty result of the default construction
     }
 }
