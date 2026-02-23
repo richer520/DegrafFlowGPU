@@ -816,6 +816,43 @@ void EvaluateOptFlow::clearResults()
     all_stats.clear();
 }
 
+void EvaluateOptFlow::exportOpticalFlowTableCSV(
+    const std::string &csv_path,
+    const std::map<std::string, std::vector<OptFlowMetrics>> &method_results)
+{
+    std::ofstream file(csv_path, std::ios::trunc);
+    if (!file.is_open())
+        return;
+
+    file << "Method,EPE(px),Fl-bg(%),Fl-fg(%),Fl-all(%),Runtime(ms)\n";
+
+    for (const auto &method_pair : method_results)
+    {
+        const std::string &method_name = method_pair.first;
+        const std::vector<OptFlowMetrics> &results = method_pair.second;
+        if (results.empty())
+            continue;
+
+        double avg_epe = 0.0, avg_fl_bg = 0.0, avg_fl_fg = 0.0, avg_fl_all = 0.0, avg_time = 0.0;
+        for (const auto &m : results)
+        {
+            avg_epe += m.EPE;
+            avg_fl_bg += m.Fl_bg;
+            avg_fl_fg += m.Fl_fg;
+            avg_fl_all += m.Fl_all;
+            avg_time += m.time_ms;
+        }
+
+        const double n = static_cast<double>(results.size());
+        file << method_name << ","
+             << (avg_epe / n) << ","
+             << (avg_fl_bg / n) << ","
+             << (avg_fl_fg / n) << ","
+             << (avg_fl_all / n) << ","
+             << (avg_time / n) << "\n";
+    }
+}
+
 
 // Backwards compatible with the original runEvaluation function
 int EvaluateOptFlow::runEvaluation(String method, bool display_images, int image_no) 
