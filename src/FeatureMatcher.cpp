@@ -16,6 +16,16 @@
 #include <json/json.h>  
 #include <cstdlib>
 
+#if __has_include(<opencv2/xfeatures2d/nonfree.hpp>)
+#include <opencv2/xfeatures2d/nonfree.hpp>
+#define DEGRAF_HAVE_XFEATURES2D 1
+#elif __has_include(<opencv2/xfeatures2d.hpp>)
+#include <opencv2/xfeatures2d.hpp>
+#define DEGRAF_HAVE_XFEATURES2D 1
+#else
+#define DEGRAF_HAVE_XFEATURES2D 0
+#endif
+
 namespace {
 inline std::string getProjectRoot()
 {
@@ -25,6 +35,21 @@ inline std::string getProjectRoot()
 	if (cv::utils::fs::exists("/root/autodl-tmp/projects/DegrafFlowGPU"))
 		return "/root/autodl-tmp/projects/DegrafFlowGPU";
 	return "/app";
+}
+
+inline cv::Ptr<cv::Feature2D> createSiftDetector(int nfeatures, int nOctaveLayers,
+                                                  double contrastThreshold, double edgeThreshold,
+                                                  double sigma)
+{
+#if DEGRAF_HAVE_XFEATURES2D
+	return cv::xfeatures2d::SIFT::create(nfeatures, nOctaveLayers, contrastThreshold, edgeThreshold, sigma);
+#else
+#if defined(CV_VERSION_MAJOR) && ((CV_VERSION_MAJOR > 4) || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 4))
+	return cv::SIFT::create(nfeatures, nOctaveLayers, contrastThreshold, edgeThreshold, sigma);
+#else
+	return cv::ORB::create(std::max(nfeatures, 500), 1.2f, 8, 31, 0, 2, cv::ORB::HARRIS_SCORE, 31, 20);
+#endif
+#endif
 }
 }
 
@@ -109,14 +134,14 @@ void FeatureMatcher::degraf_flow_LK(InputArray from, InputArray to, OutputArray 
 	else if (point == 2)
 	{
 		vector<KeyPoint> keypoints;
-		Ptr<SIFT> detector = SIFT::create(0, 2, 0.01, 10.0, 1.6);
+		Ptr<cv::Feature2D> detector = createSiftDetector(0, 2, 0.01, 10.0, 1.6);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
 	else if (point == 3)
 	{
 		vector<KeyPoint> keypoints;
-		Ptr<SIFT> detector = SIFT::create(7000, 3, 0.00, 100.0);
+		Ptr<cv::Feature2D> detector = createSiftDetector(7000, 3, 0.00, 100.0, 1.6);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
@@ -278,7 +303,7 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 	else if (point == 2)
 	{
 		vector<KeyPoint> keypoints;
-		Ptr<SIFT> detector = SIFT::create(0, 2, 0.01, 10.0, 1.6);
+		Ptr<cv::Feature2D> detector = createSiftDetector(0, 2, 0.01, 10.0, 1.6);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
@@ -310,7 +335,7 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 	else if (point == 6)
 	{
 		vector<KeyPoint> keypoints;
-		Ptr<SIFT> detector = SIFT::create(5400, 3, 0.00, 100.0);
+		Ptr<cv::Feature2D> detector = createSiftDetector(5400, 3, 0.00, 100.0, 1.6);
 		detector->detect(prev, keypoints);
 		cv::KeyPoint::convert(keypoints, points);
 	}
