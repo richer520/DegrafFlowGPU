@@ -592,17 +592,6 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
     // =====================================================
     // Step 3: Scene flow reconstruction and evaluation
     // =====================================================
-    std::string csv_path = (batch_data.size() > 1) ? 
-        "../data/outputs/batch_scene_flow_results.csv" : 
-        "../data/outputs/scene_flow_results.csv";
-    
-    // Write the first frame into the header
-    if (batch_data[0].image_no == 0 || (batch_data.size() > 1 && batch_data[0].image_no == image_indices[0])) {
-        std::ofstream header_file(csv_path, std::ios::trunc);
-        header_file << "image_no,method,EPE3d,AccS(%),AccR(%),Outlier(%),valid_count,time_ms\n";
-        header_file.close();
-    }
-    
     for (size_t i = 0; i < batch_data.size(); ++i) {
         const auto& data = batch_data[i];
         const cv::Mat& flow = batch_flows[i];
@@ -636,46 +625,11 @@ std::vector<SceneFlowMetrics> EvaluateSceneFlow::runEvaluation(
 
         SceneFlowMetrics metrics = evaluateSingleFrame(scene_flow, gt_scene_flow, true);
         metrics.time_ms = individual_times[i];
-        
-        writeMetricsToCSV(metrics, method, data.image_no, csv_path);
-        
+
         results.push_back(metrics);
         all_results_.push_back(metrics);
         
         printf("Frame %06d evaluated successfully\n", data.image_no);
-    }
-    
-    // =====================================================
-    // Step 4: Add average value when batch processing
-    // =====================================================
-    if (batch_data.size() > 1 && !results.empty()) {
-        double avg_EPE3d = 0, avg_AccS = 0, avg_AccR = 0, avg_Outlier = 0, avg_time = 0;
-        int total_valid = 0;
-        
-        for (const auto& metrics : results) {
-            avg_EPE3d += metrics.EPE3d;
-            avg_AccS += metrics.AccS;
-            avg_AccR += metrics.AccR;
-            avg_Outlier += metrics.Outlier;
-            avg_time += metrics.time_ms;
-            total_valid += metrics.valid_count;
-        }
-        
-        size_t count = results.size();
-        avg_EPE3d /= count;
-        avg_AccS /= count;
-        avg_AccR /= count;
-        avg_Outlier /= count;
-        avg_time /= count;
-        int avg_valid = total_valid / count;
-        
-        std::ofstream file(csv_path, std::ios::app);
-        if (file.is_open()) {
-            file << "AVERAGE," << method << ","
-                 << avg_EPE3d << "," << avg_AccS << "," << avg_AccR << ","
-                 << avg_Outlier << "," << avg_valid << "," << avg_time << "\n";
-            file.close();
-        }
     }
 
     return results;

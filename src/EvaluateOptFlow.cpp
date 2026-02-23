@@ -858,7 +858,8 @@ void EvaluateOptFlow::exportOpticalFlowTableCSV(
     if (!file.is_open())
         return;
 
-    file << "Method,EPE(px),Fl-bg(%),Fl-fg(%),Fl-all(%),Runtime(ms)\n";
+    // Export only metrics that are actually computed in this project.
+    file << "Method,Average EPE,Average R2.0,Average R3.0,Average Time(ms),Average STD\n";
 
     for (const auto &method_pair : method_results)
     {
@@ -867,23 +868,23 @@ void EvaluateOptFlow::exportOpticalFlowTableCSV(
         if (results.empty())
             continue;
 
-        double avg_epe = 0.0, avg_fl_bg = 0.0, avg_fl_fg = 0.0, avg_fl_all = 0.0, avg_time = 0.0;
+        double avg_epe = 0.0, avg_r2 = 0.0, avg_r3 = 0.0, avg_time = 0.0, avg_std = 0.0;
         for (const auto &m : results)
         {
             avg_epe += m.EPE;
-            avg_fl_bg += m.Fl_bg;
-            avg_fl_fg += m.Fl_fg;
-            avg_fl_all += m.Fl_all;
+            avg_r2 += m.R2;
+            avg_r3 += m.R3;
             avg_time += m.time_ms;
+            avg_std += m.std_dev;
         }
 
         const double n = static_cast<double>(results.size());
         file << method_name << ","
              << (avg_epe / n) << ","
-             << (avg_fl_bg / n) << ","
-             << (avg_fl_fg / n) << ","
-             << (avg_fl_all / n) << ","
-             << (avg_time / n) << "\n";
+             << (avg_r2 / n) << ","
+             << (avg_r3 / n) << ","
+             << (avg_time / n) << ","
+             << (avg_std / n) << "\n";
     }
 }
 

@@ -279,7 +279,6 @@ int main(int argc, char **argv)
 				 << " | Time: " << avg_time / count << " ms" << endl;
 		}
 	}
-	evaluatorscene.exportSceneFlowComparisonCSV("../data/outputs/scene_flow_comparison.csv", scene_method_results);
 	evaluatorscene.exportSceneFlowComparisonCSV("../data/outputs/table_ii_scene_flow.csv", scene_method_results);
 
 	return 0;
