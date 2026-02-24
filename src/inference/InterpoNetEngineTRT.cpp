@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <sstream>
 
 #if DEGRAF_HAVE_INPROCESS_VARIATIONAL
 #include "image.h"
@@ -45,6 +46,38 @@ std::string envOrDefault(const char *name, const std::string &fallback)
     if (value && std::string(value).size() > 0)
         return std::string(value);
     return fallback;
+}
+
+bool envInt(const char *name, int &out_value)
+{
+    const char *value = std::getenv(name);
+    if (!value || std::string(value).empty())
+        return false;
+    try
+    {
+        out_value = std::stoi(value);
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+bool envFloat(const char *name, float &out_value)
+{
+    const char *value = std::getenv(name);
+    if (!value || std::string(value).empty())
+        return false;
+    try
+    {
+        out_value = std::stof(value);
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 bool writeFlowFile(const std::string &path, const cv::Mat &flow)
@@ -117,12 +150,26 @@ bool runVariationalRefineExternal(const cv::Mat &img1, const cv::Mat &img2, cv::
     if (!writeFlowFile(flow_in_path, dense_flow))
         return false;
 
+    std::ostringstream args;
+    int niter_outer = 0;
+    float alpha = 0.0f, gamma = 0.0f, delta = 0.0f, sigma = 0.0f;
+    if (envInt("DEGRAF_VARIATIONAL_NITER_OUTER", niter_outer))
+        args << " -iter " << niter_outer;
+    if (envFloat("DEGRAF_VARIATIONAL_ALPHA", alpha))
+        args << " -alpha " << alpha;
+    if (envFloat("DEGRAF_VARIATIONAL_GAMMA", gamma))
+        args << " -gamma " << gamma;
+    if (envFloat("DEGRAF_VARIATIONAL_DELTA", delta))
+        args << " -delta " << delta;
+    if (envFloat("DEGRAF_VARIATIONAL_SIGMA", sigma))
+        args << " -sigma " << sigma;
+
     const std::string cmd =
         "\"" + variational_bin + "\" " +
         "\"" + img1_path + "\" " +
         "\"" + img2_path + "\" " +
         "\"" + flow_in_path + "\" " +
-        "\"" + flow_out_path + "\" -" + dataset;
+        "\"" + flow_out_path + "\" -" + dataset + args.str();
 
     const int exit_code = std::system(cmd.c_str());
     if (exit_code != 0)
@@ -237,6 +284,29 @@ void applyPresetFromDataset(variational_params_t &params, const std::string &dat
     }
 }
 
+void applyVariationalOverridesFromEnv(variational_params_t &params)
+{
+    int niter_outer = 0, niter_inner = 0, niter_solver = 0;
+    float alpha = 0.0f, gamma = 0.0f, delta = 0.0f, sigma = 0.0f, sor_omega = 0.0f;
+
+    if (envInt("DEGRAF_VARIATIONAL_NITER_OUTER", niter_outer) && niter_outer > 0)
+        params.niter_outer = niter_outer;
+    if (envInt("DEGRAF_VARIATIONAL_NITER_INNER", niter_inner) && niter_inner > 0)
+        params.niter_inner = niter_inner;
+    if (envInt("DEGRAF_VARIATIONAL_NITER_SOLVER", niter_solver) && niter_solver > 0)
+        params.niter_solver = niter_solver;
+    if (envFloat("DEGRAF_VARIATIONAL_ALPHA", alpha) && alpha >= 0.0f)
+        params.alpha = alpha;
+    if (envFloat("DEGRAF_VARIATIONAL_GAMMA", gamma) && gamma >= 0.0f)
+        params.gamma = gamma;
+    if (envFloat("DEGRAF_VARIATIONAL_DELTA", delta) && delta >= 0.0f)
+        params.delta = delta;
+    if (envFloat("DEGRAF_VARIATIONAL_SIGMA", sigma) && sigma > 0.0f)
+        params.sigma = sigma;
+    if (envFloat("DEGRAF_VARIATIONAL_SOR_OMEGA", sor_omega) && sor_omega > 0.0f)
+        params.sor_omega = sor_omega;
+}
+
 bool runVariationalRefineInProcess(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &dense_flow)
 {
     if (dense_flow.empty() || dense_flow.type() != CV_32FC2)
@@ -252,6 +322,7 @@ bool runVariationalRefineInProcess(const cv::Mat &img1, const cv::Mat &img2, cv:
     variational_params_t params;
     variational_params_default(&params);
     applyPresetFromDataset(params, envOrDefault("DEGRAF_VARIATIONAL_DATASET", "kitti"));
+    applyVariationalOverridesFromEnv(params);
     variational(wx, wy, im1, im2, &params);
 
     dense_flow = variationalImagesToFlowMat(wx, wy);
