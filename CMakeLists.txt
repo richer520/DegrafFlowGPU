@@ -1,12 +1,19 @@
 cmake_minimum_required(VERSION 3.12)
-project(DeGraFFlow LANGUAGES CXX CUDA)
+
+option(ENABLE_CUDA "Enable CUDA support" OFF)
+
+if(ENABLE_CUDA)
+    project(DeGraFFlow LANGUAGES CXX CUDA)
+    set(CMAKE_CUDA_STANDARD 14)
+else()
+    project(DeGraFFlow LANGUAGES CXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_CUDA_STANDARD 14)
 
-option(ENABLE_CUDA "Enable CUDA support" ON)
-
-set(OpenCV_DIR "/home/homeblue01/9/qkwv79/opencv_4.9_clean_cuda/lib/cmake/opencv4")
+if(DEFINED ENV{OpenCV_DIR})
+    set(OpenCV_DIR $ENV{OpenCV_DIR})
+endif()
 find_package(OpenCV REQUIRED)
 
 message(STATUS "OpenCV version: ${OpenCV_VERSION}")
