@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 
 #if DEGRAF_HAVE_INPROCESS_VARIATIONAL
@@ -337,7 +338,7 @@ bool runVariationalRefineInProcess(const cv::Mat &img1, const cv::Mat &img2, cv:
 
 bool runVariationalRefine(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &dense_flow, size_t idx)
 {
-    const std::string mode = envOrDefault("DEGRAF_VARIATIONAL_MODE", "inprocess");
+    const std::string mode = envOrDefault("DEGRAF_VARIATIONAL_MODE", "external");
     if (mode == "external")
         return runVariationalRefineExternal(img1, img2, dense_flow, idx);
 
@@ -366,17 +367,21 @@ bool InterpoNetEngineTRT::densifyBatch(
     std::vector<cv::Mat> &batch_flows)
 {
     const bool enable_variational = envEnabled("DEGRAF_ENABLE_VARIATIONAL", true);
+    const bool profile_stages = envEnabled("DEGRAF_PROFILE_STAGES", true);
 
     batch_flows.clear();
     if (batch_i1.size() != batch_i2.size() || batch_i1.size() != batch_matches.size())
         return false;
 
     batch_flows.reserve(batch_i1.size());
+    double total_interpolate_ms = 0.0;
+    double total_variational_ms = 0.0;
 
     for (size_t i = 0; i < batch_i1.size(); ++i)
     {
         cv::Mat dense_flow(batch_i1[i].size(), CV_32FC2, cv::Scalar(0, 0));
 
+        auto interp_start = std::chrono::high_resolution_clock::now();
         if (!batch_matches[i].src_points.empty() &&
             batch_matches[i].src_points.size() == batch_matches[i].dst_points.size())
         {
@@ -394,11 +399,27 @@ bool InterpoNetEngineTRT::densifyBatch(
                 batch_matches[i].dst_points,
                 dense_flow);
         }
+        auto interp_end = std::chrono::high_resolution_clock::now();
+        total_interpolate_ms += std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(interp_end - interp_start).count();
 
         if (enable_variational && !dense_flow.empty())
+        {
+            auto vari_start = std::chrono::high_resolution_clock::now();
             runVariationalRefine(batch_i1[i], batch_i2[i], dense_flow, i);
+            auto vari_end = std::chrono::high_resolution_clock::now();
+            total_variational_ms += std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(vari_end - vari_start).count();
+        }
 
         batch_flows.push_back(dense_flow);
+    }
+
+    if (profile_stages)
+    {
+        std::cout << "[PROFILE][InterpoNetEngineTRT] frames=" << batch_i1.size()
+                  << " interpolate_ms=" << total_interpolate_ms
+                  << " variational_ms=" << total_variational_ms
+                  << " total_ms=" << (total_interpolate_ms + total_variational_ms)
+                  << std::endl;
     }
 
     return true;

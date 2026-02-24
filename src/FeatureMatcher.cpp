@@ -518,6 +518,9 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
     std::vector<std::vector<cv::Point2f>>* out_points_filtered,   
     std::vector<std::vector<cv::Point2f>>* out_dst_points_filtered)
 {
+    const bool profile_stages = true;
+    auto t0 = std::chrono::high_resolution_clock::now();
+
     std::vector<cv::Mat> batch_flows;
     batch_flows.reserve(batch_i1.size());
 
@@ -578,6 +581,7 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
 
         batch_points.push_back(points);
     }
+    auto t1 = std::chrono::high_resolution_clock::now();
 
     // =====================================================
     // Step 2: RAFT in-process sparse matching
@@ -588,6 +592,7 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
     {
         return batch_flows;
     }
+    auto t2 = std::chrono::high_resolution_clock::now();
 
     // Optional visualization outputs for evaluation UI.
     if (out_points_filtered && out_dst_points_filtered) {
@@ -610,6 +615,23 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
     if (!interponet_engine.densifyBatch(batch_i1, batch_i2, batch_matches, batch_flows))
     {
         batch_flows.clear();
+    }
+    auto t3 = std::chrono::high_resolution_clock::now();
+
+    if (profile_stages)
+    {
+        const double degraf_ms =
+            std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t1 - t0).count();
+        const double sparse_match_ms =
+            std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t2 - t1).count();
+        const double dense_ms =
+            std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(t3 - t2).count();
+        std::cout << "[PROFILE][FeatureMatcher::degraf_flow_InterpoNet] frames=" << batch_i1.size()
+                  << " degraf_ms=" << degraf_ms
+                  << " sparse_match_ms=" << sparse_match_ms
+                  << " dense_refine_ms=" << dense_ms
+                  << " total_ms=" << (degraf_ms + sparse_match_ms + dense_ms)
+                  << std::endl;
     }
     return batch_flows;
 }
