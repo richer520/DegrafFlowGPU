@@ -401,7 +401,7 @@ bool InterpoNetEngineTRT::densifyBatch(
     const bool enable_variational = envEnabled("DEGRAF_ENABLE_VARIATIONAL", true);
     const bool profile_stages = envEnabled("DEGRAF_PROFILE_STAGES", true);
     const bool residual_gate = envEnabled("DEGRAF_VARIATIONAL_RESIDUAL_GATE", false);
-    float residual_thresh = 2.0f;
+    float residual_thresh = 3.0f;
     envFloat("DEGRAF_VARIATIONAL_RESIDUAL_THRESH", residual_thresh);
 
     batch_flows.clear();
