@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -79,6 +80,37 @@ bool envFloat(const char *name, float &out_value)
     {
         return false;
     }
+}
+
+double computeSparseResidualPx(const cv::Mat &dense_flow, const SparseFlowMatches &matches)
+{
+    if (dense_flow.empty() || dense_flow.type() != CV_32FC2)
+        return -1.0;
+    if (matches.src_points.empty() || matches.src_points.size() != matches.dst_points.size())
+        return -1.0;
+
+    double sum_epe = 0.0;
+    int used = 0;
+    for (size_t i = 0; i < matches.src_points.size(); ++i)
+    {
+        const cv::Point2f &s = matches.src_points[i];
+        const cv::Point2f &d = matches.dst_points[i];
+        const int x = static_cast<int>(std::round(s.x));
+        const int y = static_cast<int>(std::round(s.y));
+        if (x < 0 || y < 0 || x >= dense_flow.cols || y >= dense_flow.rows)
+            continue;
+
+        const cv::Vec2f &f = dense_flow.at<cv::Vec2f>(y, x);
+        const float px = s.x + f[0];
+        const float py = s.y + f[1];
+        const float ex = px - d.x;
+        const float ey = py - d.y;
+        sum_epe += std::sqrt(ex * ex + ey * ey);
+        ++used;
+    }
+    if (used == 0)
+        return -1.0;
+    return sum_epe / static_cast<double>(used);
 }
 
 bool writeFlowFile(const std::string &path, const cv::Mat &flow)
@@ -368,6 +400,9 @@ bool InterpoNetEngineTRT::densifyBatch(
 {
     const bool enable_variational = envEnabled("DEGRAF_ENABLE_VARIATIONAL", true);
     const bool profile_stages = envEnabled("DEGRAF_PROFILE_STAGES", true);
+    const bool residual_gate = envEnabled("DEGRAF_VARIATIONAL_RESIDUAL_GATE", false);
+    float residual_thresh = 2.0f;
+    envFloat("DEGRAF_VARIATIONAL_RESIDUAL_THRESH", residual_thresh);
 
     batch_flows.clear();
     if (batch_i1.size() != batch_i2.size() || batch_i1.size() != batch_matches.size())
@@ -376,6 +411,7 @@ bool InterpoNetEngineTRT::densifyBatch(
     batch_flows.reserve(batch_i1.size());
     double total_interpolate_ms = 0.0;
     double total_variational_ms = 0.0;
+    int variational_applied = 0;
 
     for (size_t i = 0; i < batch_i1.size(); ++i)
     {
@@ -402,12 +438,30 @@ bool InterpoNetEngineTRT::densifyBatch(
         auto interp_end = std::chrono::high_resolution_clock::now();
         total_interpolate_ms += std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(interp_end - interp_start).count();
 
-        if (enable_variational && !dense_flow.empty())
+        bool should_run_variational = enable_variational && !dense_flow.empty();
+        double sparse_residual_px = -1.0;
+        if (should_run_variational && residual_gate)
+        {
+            sparse_residual_px = computeSparseResidualPx(dense_flow, batch_matches[i]);
+            if (sparse_residual_px >= 0.0 && sparse_residual_px < residual_thresh)
+                should_run_variational = false;
+        }
+
+        if (should_run_variational)
         {
             auto vari_start = std::chrono::high_resolution_clock::now();
             runVariationalRefine(batch_i1[i], batch_i2[i], dense_flow, i);
             auto vari_end = std::chrono::high_resolution_clock::now();
             total_variational_ms += std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(vari_end - vari_start).count();
+            ++variational_applied;
+        }
+
+        if (profile_stages && residual_gate)
+        {
+            std::cout << "[PROFILE][InterpoNetEngineTRT][Frame " << i << "] residual_px=" << sparse_residual_px
+                      << " thresh=" << residual_thresh
+                      << " variational=" << (should_run_variational ? "on" : "skip")
+                      << std::endl;
         }
 
         batch_flows.push_back(dense_flow);
@@ -418,6 +472,7 @@ bool InterpoNetEngineTRT::densifyBatch(
         std::cout << "[PROFILE][InterpoNetEngineTRT] frames=" << batch_i1.size()
                   << " interpolate_ms=" << total_interpolate_ms
                   << " variational_ms=" << total_variational_ms
+                  << " variational_frames=" << variational_applied
                   << " total_ms=" << (total_interpolate_ms + total_variational_ms)
                   << std::endl;
     }
