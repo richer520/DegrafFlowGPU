@@ -2,6 +2,7 @@
 
 #include <opencv2/core/utils/filesystem.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <opencv2/ximgproc/sparse_match_interpolator.hpp>
 
 #include <chrono>
@@ -9,6 +10,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+
+#if DEGRAF_HAVE_INPROCESS_VARIATIONAL
+#include "image.h"
+#include "variational.h"
+#endif
 
 namespace
 {
@@ -84,7 +90,7 @@ cv::Mat readFlowFile(const std::string &path)
     return flow;
 }
 
-bool runVariationalRefine(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &dense_flow, size_t idx)
+bool runVariationalRefineExternal(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &dense_flow, size_t idx)
 {
     const std::string project_root = getProjectRoot();
     const std::string variational_bin =
@@ -137,6 +143,138 @@ bool runVariationalRefine(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &den
         std::remove(flow_out_path.c_str());
     }
     return true;
+}
+
+#if DEGRAF_HAVE_INPROCESS_VARIATIONAL
+color_image_t *toVariationalColorImage(const cv::Mat &input)
+{
+    cv::Mat bgr;
+    if (input.channels() == 1)
+        cv::cvtColor(input, bgr, cv::COLOR_GRAY2BGR);
+    else if (input.channels() == 4)
+        cv::cvtColor(input, bgr, cv::COLOR_BGRA2BGR);
+    else
+        bgr = input;
+
+    cv::Mat bgr_u8;
+    if (bgr.type() != CV_8UC3)
+        bgr.convertTo(bgr_u8, CV_8UC3);
+    else
+        bgr_u8 = bgr;
+
+    color_image_t *out = color_image_new(bgr_u8.cols, bgr_u8.rows);
+    for (int y = 0; y < bgr_u8.rows; ++y)
+    {
+        const cv::Vec3b *row = bgr_u8.ptr<cv::Vec3b>(y);
+        const int base = y * out->stride;
+        for (int x = 0; x < bgr_u8.cols; ++x)
+        {
+            // variational code expects RGB layout in c1/c2/c3.
+            out->c1[base + x] = static_cast<float>(row[x][2]);
+            out->c2[base + x] = static_cast<float>(row[x][1]);
+            out->c3[base + x] = static_cast<float>(row[x][0]);
+        }
+    }
+    return out;
+}
+
+void flowMatToVariationalImages(const cv::Mat &flow, image_t *wx, image_t *wy)
+{
+    for (int y = 0; y < flow.rows; ++y)
+    {
+        const cv::Vec2f *row = flow.ptr<cv::Vec2f>(y);
+        const int base = y * wx->stride;
+        for (int x = 0; x < flow.cols; ++x)
+        {
+            wx->data[base + x] = row[x][0];
+            wy->data[base + x] = row[x][1];
+        }
+    }
+}
+
+cv::Mat variationalImagesToFlowMat(const image_t *wx, const image_t *wy)
+{
+    cv::Mat flow(wx->height, wx->width, CV_32FC2, cv::Scalar(0, 0));
+    for (int y = 0; y < wx->height; ++y)
+    {
+        cv::Vec2f *row = flow.ptr<cv::Vec2f>(y);
+        const int base = y * wx->stride;
+        for (int x = 0; x < wx->width; ++x)
+        {
+            row[x][0] = wx->data[base + x];
+            row[x][1] = wy->data[base + x];
+        }
+    }
+    return flow;
+}
+
+void applyPresetFromDataset(variational_params_t &params, const std::string &dataset)
+{
+    if (dataset == "sintel")
+    {
+        params.niter_outer = 5;
+        params.alpha = 1.0f;
+        params.gamma = 0.72f;
+        params.delta = 0.0f;
+        params.sigma = 1.1f;
+    }
+    else if (dataset == "middlebury")
+    {
+        params.niter_outer = 25;
+        params.alpha = 1.0f;
+        params.gamma = 0.72f;
+        params.delta = 0.0f;
+        params.sigma = 1.1f;
+    }
+    else
+    {
+        // KITTI preset from original variational_main.
+        params.niter_outer = 2;
+        params.alpha = 1.0f;
+        params.gamma = 0.77f;
+        params.delta = 0.0f;
+        params.sigma = 1.7f;
+    }
+}
+
+bool runVariationalRefineInProcess(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &dense_flow)
+{
+    if (dense_flow.empty() || dense_flow.type() != CV_32FC2)
+        return false;
+
+    color_image_t *im1 = toVariationalColorImage(img1);
+    color_image_t *im2 = toVariationalColorImage(img2);
+    image_t *wx = image_new(dense_flow.cols, dense_flow.rows);
+    image_t *wy = image_new(dense_flow.cols, dense_flow.rows);
+
+    flowMatToVariationalImages(dense_flow, wx, wy);
+
+    variational_params_t params;
+    variational_params_default(&params);
+    applyPresetFromDataset(params, envOrDefault("DEGRAF_VARIATIONAL_DATASET", "kitti"));
+    variational(wx, wy, im1, im2, &params);
+
+    dense_flow = variationalImagesToFlowMat(wx, wy);
+
+    color_image_delete(im1);
+    color_image_delete(im2);
+    image_delete(wx);
+    image_delete(wy);
+    return true;
+}
+#endif
+
+bool runVariationalRefine(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &dense_flow, size_t idx)
+{
+    const std::string mode = envOrDefault("DEGRAF_VARIATIONAL_MODE", "inprocess");
+    if (mode == "external")
+        return runVariationalRefineExternal(img1, img2, dense_flow, idx);
+
+#if DEGRAF_HAVE_INPROCESS_VARIATIONAL
+    if (runVariationalRefineInProcess(img1, img2, dense_flow))
+        return true;
+#endif
+    return runVariationalRefineExternal(img1, img2, dense_flow, idx);
 }
 } // namespace
 
