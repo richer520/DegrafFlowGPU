@@ -5,7 +5,6 @@
 #include <string>
 #include <vector>
 #include <fstream>
-#include <json/json.h>
 
 namespace FlowUtils {
 
@@ -22,20 +21,6 @@ bool isFileUpToDate(const std::string& targetFile, const std::string& sourceFile
 bool isPointsCacheValid(const std::string& pointsFile, const std::string& imageFile);
 bool isEdgeCacheValid(const std::string& edgeFile, const std::string& imageFile);
 std::vector<cv::Point2f> loadCachedPoints(const std::string& pointsFile);
-
-// TCP communication related
-bool callRAFTTCP_batch(
-    const std::vector<std::string>& batch_img1_paths,
-    const std::vector<std::string>& batch_img2_paths,
-    const std::vector<std::string>& batch_points_paths,
-    const std::vector<std::string>& batch_output_paths);
-
-bool callInterpoNetTCP_batch(
-    const std::vector<std::string>& batch_img1_paths,
-    const std::vector<std::string>& batch_img2_paths,
-    const std::vector<std::string>& batch_edges_paths,
-    const std::vector<std::string>& batch_matches_paths,
-    const std::vector<std::string>& batch_output_paths);
 
 } 
 

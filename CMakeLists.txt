@@ -27,7 +27,6 @@ message(STATUS "OpenCV libraries: ${OpenCV_LIBS}")
 include_directories(
     ${OpenCV_INCLUDE_DIRS}
     ${CMAKE_SOURCE_DIR}/include
-    /usr/include/jsoncpp
 )
 
 if(USE_CUDA)
@@ -60,7 +59,10 @@ if(USE_CUDA)
 endif()
 
 # Link OpenCV library
-target_link_libraries(degraf_flow ${OpenCV_LIBS} jsoncpp rt pthread)
+target_link_libraries(degraf_flow ${OpenCV_LIBS} pthread)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(degraf_flow rt)
+endif()
 
 
 

@@ -6,49 +6,23 @@
 
 #include "stdafx.h"
 #include "FeatureMatcher.h"
-#include <cuda_runtime.h>  
 #include <chrono>         
-#include "utils.h"
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include "degraf_detector.h" 
-#include <unistd.h>
-#include <json/json.h>  
-#include <cstdlib>
-
-#if __has_include(<opencv2/xfeatures2d/nonfree.hpp>)
-#include <opencv2/xfeatures2d/nonfree.hpp>
-#define DEGRAF_HAVE_XFEATURES2D 1
-#elif __has_include(<opencv2/xfeatures2d.hpp>)
-#include <opencv2/xfeatures2d.hpp>
-#define DEGRAF_HAVE_XFEATURES2D 1
-#else
-#define DEGRAF_HAVE_XFEATURES2D 0
+#include "inference/RaftEngineTRT.h"
+#include "inference/InterpoNetEngineTRT.h"
+#if USE_CUDA
+#include "degraf_detector.h"
+#include <cuda_runtime.h>
 #endif
 
 namespace {
-inline std::string getProjectRoot()
-{
-	const char *env_path = std::getenv("DEGRAF_PROJECT_ROOT");
-	if (env_path && std::string(env_path).size() > 0)
-		return std::string(env_path);
-	if (cv::utils::fs::exists("/root/autodl-tmp/projects/DegrafFlowGPU"))
-		return "/root/autodl-tmp/projects/DegrafFlowGPU";
-	return "/app";
-}
-
 inline cv::Ptr<cv::Feature2D> createSiftDetector(int nfeatures, int nOctaveLayers,
                                                   double contrastThreshold, double edgeThreshold,
                                                   double sigma)
 {
-#if DEGRAF_HAVE_XFEATURES2D
-	return cv::xfeatures2d::SIFT::create(nfeatures, nOctaveLayers, contrastThreshold, edgeThreshold, sigma);
-#else
 #if defined(CV_VERSION_MAJOR) && ((CV_VERSION_MAJOR > 4) || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 4))
 	return cv::SIFT::create(nfeatures, nOctaveLayers, contrastThreshold, edgeThreshold, sigma);
 #else
 	return cv::ORB::create(std::max(nfeatures, 500), 1.2f, 8, 31, 0, 2, cv::ORB::HARRIS_SCORE, 31, 20);
-#endif
 #endif
 }
 }
@@ -340,6 +314,7 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 		cv::KeyPoint::convert(keypoints, points);
 	}
 	else if (point == 7) {
+#if USE_CUDA
 		// GPU-accelerated DeGraF detection
 		cv::Size s = from.size();
 		
@@ -423,6 +398,9 @@ void FeatureMatcher::degraf_flow_RLOF(InputArray from, InputArray to, OutputArra
 		cvReleaseImageHeader(&dogIpl);
 		
 		std::cout << "GPU DeGraF detection phase completed" << std::endl;
+#else
+		std::cout << "GPU DeGraF path skipped: USE_CUDA=0" << std::endl;
+#endif
 	}
 
 	long double execTime0 = (getTickCount() * 1.0000 - timeStart0) / (getTickFrequency() * 1.0000);
@@ -540,88 +518,44 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
     std::vector<std::vector<cv::Point2f>>* out_points_filtered,   
     std::vector<std::vector<cv::Point2f>>* out_dst_points_filtered)
 {
-    auto total_batch_start = std::chrono::high_resolution_clock::now();
-    
     std::vector<cv::Mat> batch_flows;
     batch_flows.reserve(batch_i1.size());
-    
-    // Pre-create all necessary folders
-    std::string project_root = getProjectRoot();
-    std::string raft_base_path = project_root + "/external/RAFT/data/degraf_input/";
-    std::string raft_images_folder = raft_base_path + "degraf_images/";
-    std::string raft_points_folder = raft_base_path + "degraf_points/";
-    std::string base_path_external = project_root + "/external/InterpoNet/data/interponet_input/";
-    
-    cv::utils::fs::createDirectories(raft_images_folder);
-    cv::utils::fs::createDirectories(raft_points_folder);
-    cv::utils::fs::createDirectories(base_path_external);
-    
+
+    if (batch_i1.size() != batch_i2.size() || batch_i1.size() != batch_num_strs.size())
+        return batch_flows;
+
     // =====================================================
-    // Step 1: Intelligent feature detection (with caching)
+    // Step 1: DeGraF feature detection in-process
     // =====================================================
-    auto degraf_start = std::chrono::high_resolution_clock::now();
-    
     std::vector<std::vector<cv::Point2f>> batch_points;
     batch_points.reserve(batch_i1.size());
-    
-    int cache_hits = 0;
-    int computed = 0;
-    
-    // Save All Images
-    std::vector<std::string> temp_img_paths;
+
     for (size_t idx = 0; idx < batch_i1.size(); ++idx) {
-        const std::string& num_str = batch_num_strs[idx];
-        std::string img_path = raft_images_folder + num_str + "_10.png";
-        
-        if (!cv::utils::fs::exists(img_path)) {
-            cv::imwrite(img_path, batch_i1[idx]);
-        }
-        temp_img_paths.push_back(img_path);
-    }
-    
-    // Check cache and process feature detection
-    for (size_t idx = 0; idx < batch_i1.size(); ++idx) {
-        const std::string& num_str = batch_num_strs[idx];
-        std::string points_path = raft_points_folder + num_str + "_points.txt";
-        std::string img_path = temp_img_paths[idx];
-        
-        if (false && FlowUtils::isPointsCacheValid(points_path, img_path)) {
-            std::vector<cv::Point2f> cached_points = FlowUtils::loadCachedPoints(points_path);
-            if (!cached_points.empty()) {
-                batch_points.push_back(cached_points);
-                cache_hits++;
-                continue;
-            }
-        }
-        
-        // Need to recalculate
-        computed++;
         const cv::Mat& prev = batch_i1[idx];
-        
         std::vector<cv::Point2f> points;
         cv::Size s = prev.size();
-        
+
         IplImage *fromIpl = cvCreateImageHeader(cvSize(prev.cols, prev.rows), IPL_DEPTH_8U, prev.channels());
         cvSetData(fromIpl, const_cast<uchar*>(prev.data), prev.step);
         cv::Mat dogMat = cv::Mat::zeros(s.height, s.width, CV_8UC3);
         IplImage *dogIpl = cvCreateImageHeader(cvSize(dogMat.cols, dogMat.rows), IPL_DEPTH_8U, dogMat.channels());
         cvSetData(dogIpl, dogMat.data, dogMat.step);
-        
+
         SaliencyDetector saliency_detector;
         saliency_detector.DoGoS_Saliency(fromIpl, dogIpl, 3, true, true);
         saliency_detector.Release();
-        
-        CudaGradientDetector *gpu_gradient_detector = new CudaGradientDetector();
+
 		cv::Mat saliency_mat = cv::cvarrToMat(dogIpl);
-
-		auto gpu_start = std::chrono::high_resolution_clock::now();
-
+#if USE_CUDA
+        CudaGradientDetector *gpu_gradient_detector = new CudaGradientDetector();
 		gpu_gradient_detector->CudaDetectGradients(saliency_mat, 3, 3, 9, 9);
-
-		auto gpu_end = std::chrono::high_resolution_clock::now();
-		auto gpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(gpu_end - gpu_start);
 		cv::KeyPoint::convert(gpu_gradient_detector->GetKeypoints(), points);
-        std::cout << "CUDA keypoints count: " << points.size() << std::endl;
+#else
+        GradientDetector *cpu_gradient_detector = new GradientDetector();
+        cpu_gradient_detector->DetectGradients(dogIpl, 3, 3, 9, 9);
+        cv::KeyPoint::convert(cpu_gradient_detector->keypoints, points);
+#endif
+
         const int MAX_POINTS = 50000;
         if (points.size() > MAX_POINTS) {
             std::vector<cv::Point2f> subsampled_points;
@@ -634,167 +568,49 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
             points = subsampled_points;
         }
         
+#if USE_CUDA
         delete gpu_gradient_detector;
+#else
+        delete cpu_gradient_detector;
+#endif
         cvReleaseImageHeader(&fromIpl);
         cvReleaseImageHeader(&dogIpl);
-        
-        FlowUtils::savePointsToFile(points, points_path);
+
         batch_points.push_back(points);
     }
-    
-    auto degraf_end = std::chrono::high_resolution_clock::now();
-    
-    // =====================================================
-    // Step 2: Smart Image Preparation
-    // =====================================================
-    auto prep_start = std::chrono::high_resolution_clock::now();
-    
-    std::vector<std::string> raft_img1_paths, raft_img2_paths, raft_points_paths, raft_matches_paths;
-    std::vector<std::string> local_matches_paths; 
-    
-    for (size_t idx = 0; idx < batch_i1.size(); ++idx) {
-        const std::string& num_str = batch_num_strs[idx];
-        
-        std::string img1_path = raft_images_folder + num_str + "_10.png";
-        std::string img2_path = raft_images_folder + num_str + "_11.png";
-        
-        if (!cv::utils::fs::exists(img1_path)) {
-            cv::imwrite(img1_path, batch_i1[idx]);
-        }
-        if (!cv::utils::fs::exists(img2_path)) {
-            cv::imwrite(img2_path, batch_i2[idx]);
-        }
-        
-        raft_img1_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_10.png");
-        raft_img2_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_11.png");
-        raft_points_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_points/" + num_str + "_points.txt");
-        raft_matches_paths.push_back(project_root + "/external/RAFT/data/raft_matches/" + num_str + "_matches.txt");
-        
-        // Save the local path for subsequent reading
-        local_matches_paths.push_back(project_root + "/external/RAFT/data/raft_matches/" + num_str + "_matches.txt");
-    }
-    
-    auto prep_end = std::chrono::high_resolution_clock::now();
-    
-    // =====================================================
-    // Step 3: Batch RAFT TCP calls
-    // =====================================================
-    auto raft_start = std::chrono::high_resolution_clock::now();
-    
-    bool raft_success = FlowUtils::callRAFTTCP_batch(raft_img1_paths, raft_img2_paths, 
-                                          raft_points_paths, raft_matches_paths);
-    
-    auto raft_end = std::chrono::high_resolution_clock::now();
 
-    if (raft_success) {
-		// Directly read the first matches file for debugging
-		std::string first_matches_path = local_matches_paths[0];
-		std::vector<cv::Point2f> src_pts, dst_pts;
-		FlowUtils::parseMatchesFile(first_matches_path, src_pts, dst_pts);
-	}
-	
-    if (!raft_success) {
+    // =====================================================
+    // Step 2: RAFT in-process sparse matching
+    // =====================================================
+    RaftEngineTRT raft_engine;
+    std::vector<SparseFlowMatches> batch_matches;
+    if (!raft_engine.estimateMatchesBatch(batch_i1, batch_i2, batch_points, batch_matches))
+    {
         return batch_flows;
     }
-    
-    // =====================================================
-    // Step 3.5: Parse the matches file to obtain feature point pairs
-    // =====================================================
+
+    // Optional visualization outputs for evaluation UI.
     if (out_points_filtered && out_dst_points_filtered) {
         out_points_filtered->clear();
         out_dst_points_filtered->clear();
         out_points_filtered->reserve(batch_i1.size());
         out_dst_points_filtered->reserve(batch_i1.size());
-        
-        for (const std::string& matches_path : local_matches_paths) {
-            std::vector<cv::Point2f> src_pts, dst_pts;
-            FlowUtils::parseMatchesFile(matches_path, src_pts, dst_pts);
-            out_points_filtered->push_back(src_pts);
-            out_dst_points_filtered->push_back(dst_pts);
+
+        for (const auto &m : batch_matches)
+        {
+            out_points_filtered->push_back(m.src_points);
+            out_dst_points_filtered->push_back(m.dst_points);
         }
     }
-    
+
     // =====================================================
-    // Step 4: Intelligent edge detection
+    // Step 3: InterpoNet in-process dense interpolation
     // =====================================================
-    auto edge_start = std::chrono::high_resolution_clock::now();
-    
-    std::vector<std::string> interponet_img1_paths, interponet_img2_paths;
-    std::vector<std::string> interponet_edges_paths, interponet_matches_paths, interponet_output_paths;
-    
-    int edge_cache_hits = 0;
-    int edge_computed = 0;
-    
-    cv::Ptr<cv::ximgproc::StructuredEdgeDetection> sed = nullptr;
-    
-    for (size_t idx = 0; idx < batch_i1.size(); ++idx) {
-        const std::string& num_str = batch_num_strs[idx];
-        const cv::Mat& prev = batch_i1[idx];
-        
-        std::string edges_dat_path = base_path_external + num_str + "_edges.dat";
-        std::string img_path = raft_images_folder + num_str + "_10.png";
-        
-        if (FlowUtils::isEdgeCacheValid(edges_dat_path, img_path)) {
-            edge_cache_hits++;
-        } else {
-            edge_computed++;
-            
-            if (!sed) {
-                sed = cv::ximgproc::createStructuredEdgeDetection(project_root + "/external/InterpoNet/model.yml");
-            }
-            
-            cv::Mat imgFloat, edges;
-            prev.convertTo(imgFloat, CV_32FC3, 1.0f / 255.0f);
-            sed->detectEdges(imgFloat, edges);
-            FlowUtils::save_edge_dat(edges, edges_dat_path);
-        }
-        
-        interponet_img1_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_10.png");
-        interponet_img2_paths.push_back(project_root + "/external/RAFT/data/degraf_input/degraf_images/" + num_str + "_11.png");
-        interponet_edges_paths.push_back(project_root + "/external/InterpoNet/data/interponet_input/" + num_str + "_edges.dat");
-        interponet_matches_paths.push_back(project_root + "/external/RAFT/data/raft_matches/" + num_str + "_matches.txt");
-        interponet_output_paths.push_back(project_root + "/external/InterpoNet/data/interponet_output/" + num_str + "_output.flo");
+    InterpoNetEngineTRT interponet_engine(127, 0.05f, true, 500.0f, 1.5f);
+    if (!interponet_engine.densifyBatch(batch_i1, batch_i2, batch_matches, batch_flows))
+    {
+        batch_flows.clear();
     }
-    
-    auto edge_end = std::chrono::high_resolution_clock::now();
-    
-    // =====================================================
-    // Step 5: Batch InterpoNet TCP calls
-    // =====================================================
-    auto interpo_start = std::chrono::high_resolution_clock::now();
-    
-    bool interpo_success = FlowUtils::callInterpoNetTCP_batch(
-        interponet_img1_paths, interponet_img2_paths,
-        interponet_edges_paths, interponet_matches_paths,
-        interponet_output_paths
-    );
-    
-    auto interpo_end = std::chrono::high_resolution_clock::now();
-    
-    if (!interpo_success) {
-        return batch_flows;
-    }
-    
-    // =====================================================
-    // Step 6: Batch read results
-    // =====================================================
-    auto read_start = std::chrono::high_resolution_clock::now();
-    
-    for (size_t idx = 0; idx < batch_num_strs.size(); ++idx) {
-        const std::string& num_str = batch_num_strs[idx];
-        std::string flo_path = project_root + "/external/InterpoNet/data/interponet_output/" + num_str + "_output.flo";
-        
-        cv::Mat dense_flow = FlowUtils::readOpticalFlowFile(flo_path);
-        
-        if (dense_flow.empty()) {
-            dense_flow = cv::Mat::zeros(batch_i1[idx].size(), CV_32FC2);
-        }
-        
-        batch_flows.push_back(dense_flow);
-    }
-    
-    auto read_end = std::chrono::high_resolution_clock::now();
-    
     return batch_flows;
 }
 

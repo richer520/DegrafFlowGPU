@@ -21,6 +21,8 @@
 #include <chrono>
 #include <map>
 #include <sstream>
+#include <fstream>
+#include <ctime>
 #include <opencv2/core/utils/filesystem.hpp>
 
 using namespace cv;
@@ -50,6 +52,94 @@ static vector<string> splitCSV(const string &input)
 			out.push_back(item);
 	}
 	return out;
+}
+
+static string makeTimestamp()
+{
+	time_t now = time(nullptr);
+	tm *lt = localtime(&now);
+	char buf[32];
+	strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", lt);
+	return string(buf);
+}
+
+static bool copyFileBinary(const string &src, const string &dst)
+{
+	ifstream in(src, ios::binary);
+	if (!in.is_open())
+		return false;
+	ofstream out(dst, ios::binary | ios::trunc);
+	if (!out.is_open())
+		return false;
+	out << in.rdbuf();
+	return true;
+}
+
+static void freezeBaselineOutputs(
+	const std::map<String, std::vector<OptFlowMetrics>> &optical_method_results,
+	const std::map<std::string, std::vector<SceneFlowMetrics>> &scene_method_results)
+{
+	const string baseline_dir = "../data/outputs/baseline";
+	cv::utils::fs::createDirectories(baseline_dir);
+	const string ts = makeTimestamp();
+
+	copyFileBinary("../data/outputs/table_i_optical_flow.csv", baseline_dir + "/table_i_optical_flow_" + ts + ".csv");
+	copyFileBinary("../data/outputs/table_ii_scene_flow.csv", baseline_dir + "/table_ii_scene_flow_" + ts + ".csv");
+
+	ofstream summary(baseline_dir + "/baseline_summary_" + ts + ".csv", ios::trunc);
+	if (!summary.is_open())
+		return;
+
+	summary << "type,method,epe_or_epe3d,r2_or_accs,r3_or_accr,outlier,time_ms,std\n";
+	for (const auto &pair : optical_method_results)
+	{
+		const auto &method = pair.first;
+		const auto &rows = pair.second;
+		if (rows.empty())
+			continue;
+		double avg_epe = 0, avg_r2 = 0, avg_r3 = 0, avg_time = 0, avg_std = 0;
+		for (const auto &m : rows)
+		{
+			avg_epe += m.EPE;
+			avg_r2 += m.R2;
+			avg_r3 += m.R3;
+			avg_time += m.time_ms;
+			avg_std += m.std_dev;
+		}
+		const double n = static_cast<double>(rows.size());
+		summary << "optical," << method << ","
+				<< (avg_epe / n) << ","
+				<< (avg_r2 / n) << ","
+				<< (avg_r3 / n) << ","
+				<< 0.0 << ","
+				<< (avg_time / n) << ","
+				<< (avg_std / n) << "\n";
+	}
+
+	for (const auto &pair : scene_method_results)
+	{
+		const auto &method = pair.first;
+		const auto &rows = pair.second;
+		if (rows.empty())
+			continue;
+		double avg_epe3d = 0, avg_accs = 0, avg_accr = 0, avg_outlier = 0, avg_time = 0;
+		for (const auto &m : rows)
+		{
+			avg_epe3d += m.EPE3d;
+			avg_accs += m.AccS;
+			avg_accr += m.AccR;
+			avg_outlier += m.Outlier;
+			avg_time += m.time_ms;
+		}
+		const double n = static_cast<double>(rows.size());
+		summary << "scene," << method << ","
+				<< (avg_epe3d / n) << ","
+				<< (avg_accs / n) << ","
+				<< (avg_accr / n) << ","
+				<< (avg_outlier / n) << ","
+				<< (avg_time / n) << ","
+				<< 0.0 << "\n";
+	}
 }
 
 int main(int argc, char **argv)
@@ -280,6 +370,7 @@ int main(int argc, char **argv)
 		}
 	}
 	evaluatorscene.exportSceneFlowComparisonCSV("../data/outputs/table_ii_scene_flow.csv", scene_method_results);
+	freezeBaselineOutputs(optical_method_results, scene_method_results);
 
 	return 0;
 }
