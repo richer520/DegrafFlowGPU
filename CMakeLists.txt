@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 
-option(USE_CUDA "Build with CUDA support" OFF)
+option(USE_CUDA "Build with CUDA support" ON)
 option(ENABLE_INPROCESS_VARIATIONAL "Link SrcVariational C library in-process" ON)
+option(ENABLE_TENSORRT "Enable TensorRT runtime integration" ON)
 
 if(USE_CUDA)
     project(degraf_flow LANGUAGES C CXX CUDA)
@@ -61,11 +62,43 @@ endif()
 
 add_executable(degraf_flow ${SRC_FILES})
 
+set(DEGRAF_HAVE_TENSORRT 0)
+if(ENABLE_TENSORRT)
+    find_path(TENSORRT_INCLUDE_DIR NvInfer.h
+        PATHS
+            /usr/include/x86_64-linux-gnu
+            /usr/local/TensorRT/include
+            /usr/include
+    )
+    find_library(TENSORRT_NVINFER_LIB nvinfer
+        PATHS
+            /usr/lib/x86_64-linux-gnu
+            /usr/local/TensorRT/lib
+            /usr/lib
+    )
+    find_library(TENSORRT_NVONNXPARSER_LIB nvonnxparser
+        PATHS
+            /usr/lib/x86_64-linux-gnu
+            /usr/local/TensorRT/lib
+            /usr/lib
+    )
+
+    if(TENSORRT_INCLUDE_DIR AND TENSORRT_NVINFER_LIB AND TENSORRT_NVONNXPARSER_LIB)
+        message(STATUS "TensorRT found: ${TENSORRT_INCLUDE_DIR}")
+        include_directories(${TENSORRT_INCLUDE_DIR})
+        target_link_libraries(degraf_flow ${TENSORRT_NVINFER_LIB} ${TENSORRT_NVONNXPARSER_LIB})
+        set(DEGRAF_HAVE_TENSORRT 1)
+    else()
+        message(WARNING "ENABLE_TENSORRT=ON but TensorRT libraries were not fully found. Building with DEGRAF_HAVE_TENSORRT=0.")
+    endif()
+endif()
+
 if(USE_CUDA)
     target_compile_definitions(degraf_flow PRIVATE USE_CUDA=1)
 else()
     target_compile_definitions(degraf_flow PRIVATE USE_CUDA=0)
 endif()
+target_compile_definitions(degraf_flow PRIVATE DEGRAF_HAVE_TENSORRT=${DEGRAF_HAVE_TENSORRT})
 
 # Add CUDA compilation support
 if(USE_CUDA)

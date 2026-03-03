@@ -519,6 +519,13 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
     std::vector<std::vector<cv::Point2f>>* out_dst_points_filtered)
 {
     const bool profile_stages = true;
+#if USE_CUDA
+    const char* degraf_backend = "cuda_degraf";
+#else
+    const char* degraf_backend = "cpu_degraf";
+#endif
+    std::cout << "[PROFILE][FeatureMatcher::degraf_flow_InterpoNet] degraf_backend="
+              << degraf_backend << std::endl;
     auto t0 = std::chrono::high_resolution_clock::now();
 
     std::vector<cv::Mat> batch_flows;
