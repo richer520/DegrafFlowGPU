@@ -245,7 +245,30 @@ public:
         if (!context_->setInputShape(input0_name_.c_str(), input_dims) ||
             !context_->setInputShape(input1_name_.c_str(), input_dims))
             return false;
-        const nvinfer1::Dims out_dims = context_->getTensorShape(primary_output_name_.c_str());
+
+        // Robustly pick the main flow output each frame by spatial size
+        // (usually flow_up, larger than flow_low).
+        std::string selected_output_name;
+        nvinfer1::Dims selected_output_dims{};
+        int best_area = -1;
+        for (const auto &name : output_names_)
+        {
+            const nvinfer1::Dims od = context_->getTensorShape(name.c_str());
+            if (od.nbDims != 4 || od.d[1] < 2 || od.d[2] <= 0 || od.d[3] <= 0)
+                continue;
+            const int area = od.d[2] * od.d[3];
+            if (area > best_area)
+            {
+                best_area = area;
+                selected_output_name = name;
+                selected_output_dims = od;
+            }
+        }
+        if (selected_output_name.empty())
+            return false;
+        if (selected_output_name != primary_output_name_)
+            primary_output_name_ = selected_output_name;
+        const nvinfer1::Dims out_dims = selected_output_dims;
 #else
         if (!context_->setBindingDimensions(input0_idx_, input_dims) ||
             !context_->setBindingDimensions(input1_idx_, input_dims))
@@ -310,6 +333,11 @@ public:
         }
         if (!context_->enqueueV3(0))
             return false;
+
+        std::cout << "[PROFILE][RaftEngineTRT][infer] selected_output=" << primary_output_name_
+                  << " output_hw=" << out_h << "x" << out_w
+                  << " input_hw=" << src_h << "x" << src_w
+                  << std::endl;
 
         if (cudaMemcpy(out.data(), out_dev, out_elems * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess)
             return false;
