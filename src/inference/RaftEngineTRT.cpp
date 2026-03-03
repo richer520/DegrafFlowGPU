@@ -245,7 +245,7 @@ public:
         if (!context_->setInputShape(input0_name_.c_str(), input_dims) ||
             !context_->setInputShape(input1_name_.c_str(), input_dims))
             return false;
-        const nvinfer1::Dims out_dims = context_->getTensorShape(output_name_.c_str());
+        const nvinfer1::Dims out_dims = context_->getTensorShape(primary_output_name_.c_str());
 #else
         if (!context_->setBindingDimensions(input0_idx_, input_dims) ||
             !context_->setBindingDimensions(input1_idx_, input_dims))
@@ -276,18 +276,38 @@ public:
         void *in1_dev = nullptr;
         void *out_dev = nullptr;
         if (!allocDeviceByName(input0_name_, in_elems * sizeof(float), in0_dev) ||
-            !allocDeviceByName(input1_name_, in_elems * sizeof(float), in1_dev) ||
-            !allocDeviceByName(output_name_, out_elems * sizeof(float), out_dev))
+            !allocDeviceByName(input1_name_, in_elems * sizeof(float), in1_dev))
             return false;
+        if (!allocDeviceByName(primary_output_name_, out_elems * sizeof(float), out_dev))
+            return false;
+
+        // TRT10 enqueueV3 requires all outputs to have an address (or output allocator).
+        for (const auto &name : output_names_)
+        {
+            const nvinfer1::Dims od = context_->getTensorShape(name.c_str());
+            if (od.nbDims != 4 || od.d[1] <= 0 || od.d[2] <= 0 || od.d[3] <= 0)
+                return false;
+            const size_t od_elems = static_cast<size_t>(od.d[1]) * od.d[2] * od.d[3];
+            void *tmp = nullptr;
+            if (!allocDeviceByName(name, od_elems * sizeof(float), tmp))
+                return false;
+        }
 
         if (cudaMemcpy(in0_dev, in0.data(), in_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess ||
             cudaMemcpy(in1_dev, in1.data(), in_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess)
             return false;
 
         if (!context_->setTensorAddress(input0_name_.c_str(), in0_dev) ||
-            !context_->setTensorAddress(input1_name_.c_str(), in1_dev) ||
-            !context_->setTensorAddress(output_name_.c_str(), out_dev))
+            !context_->setTensorAddress(input1_name_.c_str(), in1_dev))
             return false;
+        for (const auto &name : output_names_)
+        {
+            void *ptr = nullptr;
+            if (!getDevicePtrByName(name, ptr))
+                return false;
+            if (!context_->setTensorAddress(name.c_str(), ptr))
+                return false;
+        }
         if (!context_->enqueueV3(0))
             return false;
 
@@ -352,15 +372,23 @@ private:
             cudaFree(input1_dev_);
         if (output_dev_)
             cudaFree(output_dev_);
-        input0_dev_ = input1_dev_ = output_dev_ = nullptr;
-        input0_bytes_ = input1_bytes_ = output_bytes_ = 0;
+        input0_dev_ = input1_dev_ = nullptr;
+        input0_bytes_ = input1_bytes_ = 0;
+        for (void *ptr : output_devs_)
+        {
+            if (ptr)
+                cudaFree(ptr);
+        }
+        output_devs_.clear();
+        output_bytes_.clear();
         context_.reset();
         engine_.reset();
         runtime_.reset();
         initialized_ = false;
         input0_name_.clear();
         input1_name_.clear();
-        output_name_.clear();
+        output_names_.clear();
+        primary_output_name_.clear();
 #if !defined(NV_TENSORRT_MAJOR) || (NV_TENSORRT_MAJOR < 10)
         input0_idx_ = input1_idx_ = output_idx_ = -1;
 #endif
@@ -388,11 +416,23 @@ private:
             }
             else
             {
-                if (name.find("flow_up") != std::string::npos || output_name_.empty())
-                    output_name_ = tname;
+                output_names_.push_back(tname);
             }
         }
-        return !input0_name_.empty() && !input1_name_.empty() && !output_name_.empty();
+        if (output_names_.empty())
+            return false;
+        primary_output_name_ = output_names_.front();
+        for (const auto &n : output_names_)
+        {
+            if (toLower(n).find("flow_up") != std::string::npos)
+            {
+                primary_output_name_ = n;
+                break;
+            }
+        }
+        output_devs_.assign(output_names_.size(), nullptr);
+        output_bytes_.assign(output_names_.size(), 0);
+        return !input0_name_.empty() && !input1_name_.empty();
 #else
         const int nb = engine_->getNbBindings();
         if (nb < 3)
@@ -434,13 +474,28 @@ private:
             slot = &input1_dev_;
             allocated = &input1_bytes_;
         }
-        else if (name == output_name_)
-        {
-            slot = &output_dev_;
-            allocated = &output_bytes_;
-        }
         else
         {
+            for (size_t i = 0; i < output_names_.size(); ++i)
+            {
+                if (name == output_names_[i])
+                {
+                    if (output_devs_[i] && output_bytes_[i] >= bytes)
+                    {
+                        out_ptr = output_devs_[i];
+                        return true;
+                    }
+                    if (output_devs_[i])
+                        cudaFree(output_devs_[i]);
+                    void *ptr = nullptr;
+                    if (cudaMalloc(&ptr, bytes) != cudaSuccess)
+                        return false;
+                    output_devs_[i] = ptr;
+                    output_bytes_[i] = bytes;
+                    out_ptr = ptr;
+                    return true;
+                }
+            }
             return false;
         }
 
@@ -461,6 +516,29 @@ private:
         *allocated = bytes;
         out_ptr = ptr;
         return true;
+    }
+
+    bool getDevicePtrByName(const std::string &name, void *&out_ptr)
+    {
+        if (name == input0_name_)
+        {
+            out_ptr = input0_dev_;
+            return out_ptr != nullptr;
+        }
+        if (name == input1_name_)
+        {
+            out_ptr = input1_dev_;
+            return out_ptr != nullptr;
+        }
+        for (size_t i = 0; i < output_names_.size(); ++i)
+        {
+            if (name == output_names_[i])
+            {
+                out_ptr = output_devs_[i];
+                return out_ptr != nullptr;
+            }
+        }
+        return false;
     }
 #else
     bool allocDevice(int binding_idx, size_t bytes, void *&out_ptr)
@@ -522,13 +600,14 @@ private:
 
     std::string input0_name_;
     std::string input1_name_;
-    std::string output_name_;
+    std::vector<std::string> output_names_;
+    std::string primary_output_name_;
     void *input0_dev_ = nullptr;
     void *input1_dev_ = nullptr;
-    void *output_dev_ = nullptr;
     size_t input0_bytes_ = 0;
     size_t input1_bytes_ = 0;
-    size_t output_bytes_ = 0;
+    std::vector<void *> output_devs_;
+    std::vector<size_t> output_bytes_;
 
     std::string engine_path_;
     bool initialized_ = false;
