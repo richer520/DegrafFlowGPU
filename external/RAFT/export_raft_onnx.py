@@ -11,6 +11,7 @@ import os
 import sys
 
 import torch
+import torch.nn as nn
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(SCRIPT_DIR)
@@ -20,9 +21,25 @@ from core.raft import RAFT  # type: ignore
 
 
 class _Args:
-    small = False
-    mixed_precision = False
-    alternate_corr = False
+    def __init__(self):
+        self.small = False
+        self.mixed_precision = False
+        self.alternate_corr = False
+        self.dropout = 0.0
+
+    def __contains__(self, item):
+        return hasattr(self, item)
+
+
+class _RaftOnnxWrapper(nn.Module):
+    def __init__(self, raft_model: nn.Module, iters: int):
+        super().__init__()
+        self.raft = raft_model
+        self.iters = iters
+
+    def forward(self, image1, image2):
+        flow_low, flow_up = self.raft(image1, image2, iters=self.iters, test_mode=True)
+        return flow_low, flow_up
 
 
 def main() -> int:
@@ -40,21 +57,23 @@ def main() -> int:
         state = state["state_dict"]
     model.load_state_dict(state, strict=False)
     model.eval()
+    wrapper = _RaftOnnxWrapper(model, args.iters).eval()
 
     img1 = torch.randn(1, 3, args.height, args.width, dtype=torch.float32)
     img2 = torch.randn(1, 3, args.height, args.width, dtype=torch.float32)
 
     with torch.no_grad():
         torch.onnx.export(
-            model,
-            (img1, img2, args.iters, True),
+            wrapper,
+            (img1, img2),
             args.output,
             opset_version=17,
-            input_names=["image1", "image2", "iters", "test_mode"],
+            input_names=["image1", "image2"],
             output_names=["flow_low", "flow_up"],
             dynamic_axes={
                 "image1": {0: "batch", 2: "height", 3: "width"},
                 "image2": {0: "batch", 2: "height", 3: "width"},
+                "flow_low": {0: "batch", 2: "height", 3: "width"},
                 "flow_up": {0: "batch", 2: "height", 3: "width"},
             },
         )
