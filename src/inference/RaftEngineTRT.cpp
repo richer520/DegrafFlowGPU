@@ -370,8 +370,6 @@ private:
             cudaFree(input0_dev_);
         if (input1_dev_)
             cudaFree(input1_dev_);
-        if (output_dev_)
-            cudaFree(output_dev_);
         input0_dev_ = input1_dev_ = nullptr;
         input0_bytes_ = input1_bytes_ = 0;
         for (void *ptr : output_devs_)
