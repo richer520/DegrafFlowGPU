@@ -224,8 +224,21 @@ public:
         if (img1.empty() || img2.empty() || img1.size() != img2.size())
             return false;
 
-        const int h = img1.rows;
-        const int w = img1.cols;
+        const int src_h = img1.rows;
+        const int src_w = img1.cols;
+        const int pad_h = (8 - (src_h % 8)) % 8;
+        const int pad_w = (8 - (src_w % 8)) % 8;
+
+        cv::Mat img1_pad = img1;
+        cv::Mat img2_pad = img2;
+        if (pad_h > 0 || pad_w > 0)
+        {
+            cv::copyMakeBorder(img1, img1_pad, 0, pad_h, 0, pad_w, cv::BORDER_REPLICATE);
+            cv::copyMakeBorder(img2, img2_pad, 0, pad_h, 0, pad_w, cv::BORDER_REPLICATE);
+        }
+
+        const int h = img1_pad.rows;
+        const int w = img1_pad.cols;
 
         nvinfer1::Dims4 input_dims(1, 3, h, w);
         if (!context_->setBindingDimensions(input0_idx_, input_dims) ||
@@ -249,8 +262,8 @@ public:
         std::vector<float> in0(in_elems);
         std::vector<float> in1(in_elems);
         std::vector<float> out(out_elems);
-        toCHWFloat(img1, in0);
-        toCHWFloat(img2, in1);
+        toCHWFloat(img1_pad, in0);
+        toCHWFloat(img2_pad, in1);
 
         void *bindings[3] = {nullptr, nullptr, nullptr};
         if (!allocDevice(input0_idx_, in_elems * sizeof(float), bindings[input0_idx_]) ||
@@ -279,6 +292,10 @@ public:
                 row[xx][1] = out[static_cast<size_t>(out_h) * out_w + base];
             }
         }
+        if (src_h > out_h || src_w > out_w)
+            return false;
+        if (src_h != out_h || src_w != out_w)
+            flow_hw2 = flow_hw2(cv::Rect(0, 0, src_w, src_h)).clone();
         return true;
     }
 

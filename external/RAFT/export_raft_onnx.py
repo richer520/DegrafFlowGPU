@@ -42,12 +42,16 @@ class _RaftOnnxWrapper(nn.Module):
         return flow_low, flow_up
 
 
+def _align_to_multiple_of_8(v: int) -> int:
+    return ((v + 7) // 8) * 8
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", required=True, help="RAFT checkpoint .pth")
     parser.add_argument("--output", required=True, help="Output ONNX path")
     parser.add_argument("--height", type=int, default=376)
-    parser.add_argument("--width", type=int, default=1241)
+    parser.add_argument("--width", type=int, default=1240)
     parser.add_argument("--iters", type=int, default=12)
     args = parser.parse_args()
 
@@ -59,8 +63,17 @@ def main() -> int:
     model.eval()
     wrapper = _RaftOnnxWrapper(model, args.iters).eval()
 
-    img1 = torch.randn(1, 3, args.height, args.width, dtype=torch.float32)
-    img2 = torch.randn(1, 3, args.height, args.width, dtype=torch.float32)
+    export_h = _align_to_multiple_of_8(args.height)
+    export_w = _align_to_multiple_of_8(args.width)
+    if export_h != args.height or export_w != args.width:
+        print(
+            f"[WARN] RAFT expects H/W multiples of 8. "
+            f"Auto-adjust export shape from ({args.height},{args.width}) "
+            f"to ({export_h},{export_w})."
+        )
+
+    img1 = torch.randn(1, 3, export_h, export_w, dtype=torch.float32)
+    img2 = torch.randn(1, 3, export_h, export_w, dtype=torch.float32)
 
     with torch.no_grad():
         torch.onnx.export(
@@ -79,6 +92,7 @@ def main() -> int:
         )
 
     print(f"[OK] Exported ONNX: {args.output}")
+    print(f"[OK] Export shape: 1x3x{export_h}x{export_w}")
     return 0
 
 
