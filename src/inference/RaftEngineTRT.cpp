@@ -2,7 +2,9 @@
 
 #include <chrono>
 #include <cctype>
+#include <cstdint>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -44,6 +46,69 @@ std::string toLower(std::string s)
     for (char &c : s)
         c = static_cast<char>(std::tolower(c));
     return s;
+}
+
+size_t tensorElementSize(nvinfer1::DataType dt)
+{
+    switch (dt)
+    {
+    case nvinfer1::DataType::kFLOAT:
+        return 4;
+    case nvinfer1::DataType::kHALF:
+        return 2;
+    case nvinfer1::DataType::kINT8:
+        return 1;
+    case nvinfer1::DataType::kINT32:
+        return 4;
+#if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR >= 10)
+    case nvinfer1::DataType::kINT64:
+        return 8;
+    case nvinfer1::DataType::kBOOL:
+        return 1;
+#endif
+    default:
+        return 0;
+    }
+}
+
+float halfToFloat(uint16_t h)
+{
+    const uint32_t sign = (h & 0x8000u) << 16;
+    uint32_t exp = (h & 0x7C00u) >> 10;
+    uint32_t mant = h & 0x03FFu;
+
+    uint32_t fbits = 0;
+    if (exp == 0)
+    {
+        if (mant == 0)
+        {
+            fbits = sign;
+        }
+        else
+        {
+            exp = 127 - 15 + 1;
+            while ((mant & 0x0400u) == 0)
+            {
+                mant <<= 1;
+                --exp;
+            }
+            mant &= 0x03FFu;
+            fbits = sign | (exp << 23) | (mant << 13);
+        }
+    }
+    else if (exp == 0x1Fu)
+    {
+        fbits = sign | 0x7F800000u | (mant << 13);
+    }
+    else
+    {
+        exp = exp + (127 - 15);
+        fbits = sign | (exp << 23) | (mant << 13);
+    }
+
+    float out = 0.0f;
+    std::memcpy(&out, &fbits, sizeof(float));
+    return out;
 }
 
 float bilinearSample(const std::vector<float> &chw,
@@ -287,10 +352,14 @@ public:
         const size_t in_elems = static_cast<size_t>(3) * h * w;
         const size_t out_channels = static_cast<size_t>(out_dims.d[1]);
         const size_t out_elems = out_channels * out_h * out_w;
+        const nvinfer1::DataType primary_dtype = engine_->getTensorDataType(primary_output_name_.c_str());
+        const size_t primary_elem_bytes = tensorElementSize(primary_dtype);
+        if (primary_elem_bytes == 0)
+            return false;
 
         std::vector<float> in0(in_elems);
         std::vector<float> in1(in_elems);
-        std::vector<float> out(out_elems);
+        std::vector<float> out(out_elems, 0.0f);
         toCHWFloat(img1_pad, in0);
         toCHWFloat(img2_pad, in1);
 
@@ -301,7 +370,7 @@ public:
         if (!allocDeviceByName(input0_name_, in_elems * sizeof(float), in0_dev) ||
             !allocDeviceByName(input1_name_, in_elems * sizeof(float), in1_dev))
             return false;
-        if (!allocDeviceByName(primary_output_name_, out_elems * sizeof(float), out_dev))
+        if (!allocDeviceByName(primary_output_name_, out_elems * primary_elem_bytes, out_dev))
             return false;
 
         // TRT10 enqueueV3 requires all outputs to have an address (or output allocator).
@@ -310,9 +379,13 @@ public:
             const nvinfer1::Dims od = context_->getTensorShape(name.c_str());
             if (od.nbDims != 4 || od.d[1] <= 0 || od.d[2] <= 0 || od.d[3] <= 0)
                 return false;
+            const nvinfer1::DataType odt = engine_->getTensorDataType(name.c_str());
+            const size_t od_elem_bytes = tensorElementSize(odt);
+            if (od_elem_bytes == 0)
+                return false;
             const size_t od_elems = static_cast<size_t>(od.d[1]) * od.d[2] * od.d[3];
             void *tmp = nullptr;
-            if (!allocDeviceByName(name, od_elems * sizeof(float), tmp))
+            if (!allocDeviceByName(name, od_elems * od_elem_bytes, tmp))
                 return false;
         }
 
@@ -335,12 +408,29 @@ public:
             return false;
 
         std::cout << "[PROFILE][RaftEngineTRT][infer] selected_output=" << primary_output_name_
+                  << " dtype=" << static_cast<int>(primary_dtype)
                   << " output_hw=" << out_h << "x" << out_w
                   << " input_hw=" << src_h << "x" << src_w
                   << std::endl;
 
-        if (cudaMemcpy(out.data(), out_dev, out_elems * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess)
+        if (primary_dtype == nvinfer1::DataType::kFLOAT)
+        {
+            if (cudaMemcpy(out.data(), out_dev, out_elems * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess)
+                return false;
+        }
+        else if (primary_dtype == nvinfer1::DataType::kHALF)
+        {
+            std::vector<uint16_t> out_half(out_elems, 0);
+            if (cudaMemcpy(out_half.data(), out_dev, out_elems * sizeof(uint16_t), cudaMemcpyDeviceToHost) != cudaSuccess)
+                return false;
+            for (size_t i = 0; i < out_elems; ++i)
+                out[i] = halfToFloat(out_half[i]);
+        }
+        else
+        {
+            std::cerr << "[ERROR][RaftEngineTRT] Unsupported output dtype for flow tensor." << std::endl;
             return false;
+        }
 #else
         void *bindings[3] = {nullptr, nullptr, nullptr};
         if (!allocDevice(input0_idx_, in_elems * sizeof(float), bindings[input0_idx_]) ||
