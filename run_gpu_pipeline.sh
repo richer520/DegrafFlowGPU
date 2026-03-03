@@ -28,15 +28,23 @@ if command -v nvcc >/dev/null 2>&1; then
   BUILD_DIR="${DEGRAF_PROJECT_ROOT}/build_gpu"
   mkdir -p "${BUILD_DIR}"
   cd "${BUILD_DIR}"
+  CMAKE_EXTRA_ARGS="${DEGRAF_CMAKE_EXTRA_ARGS:-}"
   echo "[INFO] CUDA toolkit detected, building with USE_CUDA=ON"
-  cmake .. -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75
+  if [ -n "${CMAKE_EXTRA_ARGS}" ]; then
+    echo "[INFO] Additional CMake args: ${CMAKE_EXTRA_ARGS}"
+  fi
+  cmake .. -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75 ${CMAKE_EXTRA_ARGS}
 else
   if [ "${DEGRAF_ALLOW_CPU_FALLBACK}" = "1" ]; then
     BUILD_DIR="${DEGRAF_PROJECT_ROOT}/build_cpu"
     mkdir -p "${BUILD_DIR}"
     cd "${BUILD_DIR}"
+    CMAKE_EXTRA_ARGS="${DEGRAF_CMAKE_EXTRA_ARGS:-}"
     echo "[WARN] nvcc not found, falling back to USE_CUDA=OFF (DEGRAF_ALLOW_CPU_FALLBACK=1)"
-    cmake .. -DUSE_CUDA=OFF
+    if [ -n "${CMAKE_EXTRA_ARGS}" ]; then
+      echo "[INFO] Additional CMake args: ${CMAKE_EXTRA_ARGS}"
+    fi
+    cmake .. -DUSE_CUDA=OFF ${CMAKE_EXTRA_ARGS}
   else
     echo "[ERROR] nvcc not found. Refusing CPU fallback because DEGRAF_ALLOW_CPU_FALLBACK=0."
     echo "[ERROR] Install CUDA toolkit or explicitly set DEGRAF_ALLOW_CPU_FALLBACK=1."
