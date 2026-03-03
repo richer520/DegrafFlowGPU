@@ -241,13 +241,19 @@ public:
         const int w = img1_pad.cols;
 
         nvinfer1::Dims4 input_dims(1, 3, h, w);
+#if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR >= 10)
+        if (!context_->setInputShape(input0_name_.c_str(), input_dims) ||
+            !context_->setInputShape(input1_name_.c_str(), input_dims))
+            return false;
+        const nvinfer1::Dims out_dims = context_->getTensorShape(output_name_.c_str());
+#else
         if (!context_->setBindingDimensions(input0_idx_, input_dims) ||
             !context_->setBindingDimensions(input1_idx_, input_dims))
             return false;
         if (!context_->allInputDimensionsSpecified())
             return false;
-
         const nvinfer1::Dims out_dims = context_->getBindingDimensions(output_idx_);
+#endif
         if (out_dims.nbDims != 4 || out_dims.d[1] < 2)
             return false;
         const int out_h = out_dims.d[2];
@@ -265,6 +271,29 @@ public:
         toCHWFloat(img1_pad, in0);
         toCHWFloat(img2_pad, in1);
 
+#if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR >= 10)
+        void *in0_dev = nullptr;
+        void *in1_dev = nullptr;
+        void *out_dev = nullptr;
+        if (!allocDeviceByName(input0_name_, in_elems * sizeof(float), in0_dev) ||
+            !allocDeviceByName(input1_name_, in_elems * sizeof(float), in1_dev) ||
+            !allocDeviceByName(output_name_, out_elems * sizeof(float), out_dev))
+            return false;
+
+        if (cudaMemcpy(in0_dev, in0.data(), in_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess ||
+            cudaMemcpy(in1_dev, in1.data(), in_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess)
+            return false;
+
+        if (!context_->setTensorAddress(input0_name_.c_str(), in0_dev) ||
+            !context_->setTensorAddress(input1_name_.c_str(), in1_dev) ||
+            !context_->setTensorAddress(output_name_.c_str(), out_dev))
+            return false;
+        if (!context_->enqueueV3(0))
+            return false;
+
+        if (cudaMemcpy(out.data(), out_dev, out_elems * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess)
+            return false;
+#else
         void *bindings[3] = {nullptr, nullptr, nullptr};
         if (!allocDevice(input0_idx_, in_elems * sizeof(float), bindings[input0_idx_]) ||
             !allocDevice(input1_idx_, in_elems * sizeof(float), bindings[input1_idx_]) ||
@@ -280,6 +309,7 @@ public:
 
         if (cudaMemcpy(out.data(), bindings[output_idx_], out_elems * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess)
             return false;
+#endif
 
         flow_hw2 = cv::Mat(out_h, out_w, CV_32FC2, cv::Scalar(0, 0));
         for (int yy = 0; yy < out_h; ++yy)
@@ -306,34 +336,67 @@ private:
         void operator()(T *obj) const
         {
             if (obj)
+#if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR >= 10)
+                delete obj;
+#else
                 obj->destroy();
+#endif
         }
     };
 
     void reset()
     {
-        for (void *ptr : device_buffers_)
-        {
-            if (ptr)
-                cudaFree(ptr);
-        }
-        device_buffers_.assign(3, nullptr);
-        allocated_bytes_.assign(3, 0);
+        if (input0_dev_)
+            cudaFree(input0_dev_);
+        if (input1_dev_)
+            cudaFree(input1_dev_);
+        if (output_dev_)
+            cudaFree(output_dev_);
+        input0_dev_ = input1_dev_ = output_dev_ = nullptr;
+        input0_bytes_ = input1_bytes_ = output_bytes_ = 0;
         context_.reset();
         engine_.reset();
         runtime_.reset();
         initialized_ = false;
+        input0_name_.clear();
+        input1_name_.clear();
+        output_name_.clear();
+#if !defined(NV_TENSORRT_MAJOR) || (NV_TENSORRT_MAJOR < 10)
         input0_idx_ = input1_idx_ = output_idx_ = -1;
+#endif
     }
 
     bool resolveBindings()
     {
+#if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR >= 10)
+        const int nb = static_cast<int>(engine_->getNbIOTensors());
+        if (nb < 3)
+            return false;
+        for (int i = 0; i < nb; ++i)
+        {
+            const char *tname = engine_->getIOTensorName(i);
+            if (!tname)
+                continue;
+            const std::string name = toLower(tname);
+            const auto mode = engine_->getTensorIOMode(tname);
+            if (mode == nvinfer1::TensorIOMode::kINPUT)
+            {
+                if (name.find("image1") != std::string::npos || (input0_name_.empty() && name.find("input") != std::string::npos))
+                    input0_name_ = tname;
+                else if (name.find("image2") != std::string::npos || input1_name_.empty())
+                    input1_name_ = tname;
+            }
+            else
+            {
+                if (name.find("flow_up") != std::string::npos || output_name_.empty())
+                    output_name_ = tname;
+            }
+        }
+        return !input0_name_.empty() && !input1_name_.empty() && !output_name_.empty();
+#else
         const int nb = engine_->getNbBindings();
         if (nb < 3)
             return false;
-
-        device_buffers_.assign(static_cast<size_t>(nb), nullptr);
-        allocated_bytes_.assign(static_cast<size_t>(nb), 0);
 
         for (int i = 0; i < nb; ++i)
         {
@@ -353,8 +416,53 @@ private:
         }
 
         return input0_idx_ >= 0 && input1_idx_ >= 0 && output_idx_ >= 0;
+#endif
     }
 
+#if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR >= 10)
+    bool allocDeviceByName(const std::string &name, size_t bytes, void *&out_ptr)
+    {
+        void **slot = nullptr;
+        size_t *allocated = nullptr;
+        if (name == input0_name_)
+        {
+            slot = &input0_dev_;
+            allocated = &input0_bytes_;
+        }
+        else if (name == input1_name_)
+        {
+            slot = &input1_dev_;
+            allocated = &input1_bytes_;
+        }
+        else if (name == output_name_)
+        {
+            slot = &output_dev_;
+            allocated = &output_bytes_;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (*slot && *allocated >= bytes)
+        {
+            out_ptr = *slot;
+            return true;
+        }
+
+        if (*slot)
+            cudaFree(*slot);
+
+        void *ptr = nullptr;
+        if (cudaMalloc(&ptr, bytes) != cudaSuccess)
+            return false;
+
+        *slot = ptr;
+        *allocated = bytes;
+        out_ptr = ptr;
+        return true;
+    }
+#else
     bool allocDevice(int binding_idx, size_t bytes, void *&out_ptr)
     {
         if (binding_idx < 0 || static_cast<size_t>(binding_idx) >= device_buffers_.size())
@@ -377,6 +485,7 @@ private:
         out_ptr = ptr;
         return true;
     }
+#endif
 
     static void toCHWFloat(const cv::Mat &img, std::vector<float> &out)
     {
@@ -410,14 +519,24 @@ private:
     std::unique_ptr<nvinfer1::IRuntime, TRTDestroy> runtime_;
     std::unique_ptr<nvinfer1::ICudaEngine, TRTDestroy> engine_;
     std::unique_ptr<nvinfer1::IExecutionContext, TRTDestroy> context_;
-    std::vector<void *> device_buffers_;
-    std::vector<size_t> allocated_bytes_;
+
+    std::string input0_name_;
+    std::string input1_name_;
+    std::string output_name_;
+    void *input0_dev_ = nullptr;
+    void *input1_dev_ = nullptr;
+    void *output_dev_ = nullptr;
+    size_t input0_bytes_ = 0;
+    size_t input1_bytes_ = 0;
+    size_t output_bytes_ = 0;
 
     std::string engine_path_;
     bool initialized_ = false;
+#if !defined(NV_TENSORRT_MAJOR) || (NV_TENSORRT_MAJOR < 10)
     int input0_idx_ = -1;
     int input1_idx_ = -1;
     int output_idx_ = -1;
+#endif
 };
 #endif
 } // namespace
