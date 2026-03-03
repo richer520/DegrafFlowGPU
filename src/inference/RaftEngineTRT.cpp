@@ -700,6 +700,8 @@ bool RaftEngineTRT::estimateMatchesBatch(
 
         const float sx = static_cast<float>(dense_flow.cols) / static_cast<float>(batch_i1[i].cols);
         const float sy = static_cast<float>(dense_flow.rows) / static_cast<float>(batch_i1[i].rows);
+        const float inv_sx = (sx > 1e-6f) ? (1.0f / sx) : 1.0f;
+        const float inv_sy = (sy > 1e-6f) ? (1.0f / sy) : 1.0f;
         const int max_flow_length = 100;
         for (const auto &p : src)
         {
@@ -711,7 +713,9 @@ bool RaftEngineTRT::estimateMatchesBatch(
             const float du = bilinearSample(flow_chw, 0, dense_flow.rows, dense_flow.cols, fy, fx);
             const float dv = bilinearSample(flow_chw, 1, dense_flow.rows, dense_flow.cols, fy, fx);
 
-            const cv::Point2f d(p.x + du, p.y + dv);
+            // Keep behavior aligned with legacy Python matcher:
+            // sampled flow is in dense-flow grid coordinates, convert back to original image scale.
+            const cv::Point2f d(p.x + du * inv_sx, p.y + dv * inv_sy);
             const float dx = p.x - d.x;
             const float dy = p.y - d.y;
             if (std::sqrt(dx * dx + dy * dy) >= max_flow_length)
