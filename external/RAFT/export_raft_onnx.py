@@ -46,6 +46,18 @@ def _align_to_multiple_of_8(v: int) -> int:
     return ((v + 7) // 8) * 8
 
 
+def _normalize_state_dict(raw_state):
+    if isinstance(raw_state, dict) and "state_dict" in raw_state:
+        raw_state = raw_state["state_dict"]
+    if not isinstance(raw_state, dict):
+        raise RuntimeError("Checkpoint format is invalid: expected a state_dict-like mapping.")
+
+    # Common case: checkpoints saved from DataParallel have "module." prefix.
+    if any(k.startswith("module.") for k in raw_state.keys()):
+        return {k[len("module."):]: v for k, v in raw_state.items()}
+    return raw_state
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", required=True, help="RAFT checkpoint .pth")
@@ -57,9 +69,17 @@ def main() -> int:
 
     model = RAFT(_Args())
     state = torch.load(args.ckpt, map_location="cpu")
-    if "state_dict" in state:
-        state = state["state_dict"]
-    model.load_state_dict(state, strict=False)
+    state = _normalize_state_dict(state)
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing or unexpected:
+        missing_preview = ", ".join(missing[:8]) if missing else "<none>"
+        unexpected_preview = ", ".join(unexpected[:8]) if unexpected else "<none>"
+        raise RuntimeError(
+            "Checkpoint did not cleanly match RAFT model.\n"
+            f"Missing keys ({len(missing)}): {missing_preview}\n"
+            f"Unexpected keys ({len(unexpected)}): {unexpected_preview}"
+        )
+    print(f"[OK] Loaded RAFT checkpoint with {len(state)} tensors.")
     model.eval()
     wrapper = _RaftOnnxWrapper(model, args.iters).eval()
 
