@@ -64,6 +64,7 @@ bool dumpMatchesToFile(const std::string &path, const SparseFlowMatches &matches
     return true;
 }
 
+#if DEGRAF_HAVE_TENSORRT
 size_t tensorElementSize(nvinfer1::DataType dt)
 {
     switch (dt)
@@ -86,6 +87,7 @@ size_t tensorElementSize(nvinfer1::DataType dt)
         return 0;
     }
 }
+#endif
 
 float halfToFloat(uint16_t h)
 {
