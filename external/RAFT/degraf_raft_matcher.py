@@ -309,7 +309,7 @@ def run_raft_matching_batch(batch_data, model_path='/app/models/raft-kitti.pth',
                 torch.cuda.synchronize()
 
                 # Padding
-                padder = InputPadder(batch_tensor1.shape)
+                padder = InputPadder(batch_tensor1.shape, mode='kitti')
                 batch_tensor1_pad, batch_tensor2_pad = padder.pad(batch_tensor1, batch_tensor2)
                 
                 try:

@@ -48,6 +48,22 @@ std::string toLower(std::string s)
     return s;
 }
 
+bool dumpMatchesToFile(const std::string &path, const SparseFlowMatches &matches)
+{
+    std::ofstream ofs(path);
+    if (!ofs.is_open())
+        return false;
+    ofs << "# src_x src_y dst_x dst_y\n";
+    const size_t n = std::min(matches.src_points.size(), matches.dst_points.size());
+    for (size_t i = 0; i < n; ++i)
+    {
+        const cv::Point2f &s = matches.src_points[i];
+        const cv::Point2f &d = matches.dst_points[i];
+        ofs << s.x << " " << s.y << " " << d.x << " " << d.y << "\n";
+    }
+    return true;
+}
+
 size_t tensorElementSize(nvinfer1::DataType dt)
 {
     switch (dt)
@@ -293,13 +309,18 @@ public:
         const int src_w = img1.cols;
         const int pad_h = (8 - (src_h % 8)) % 8;
         const int pad_w = (8 - (src_w % 8)) % 8;
+        const int pad_left = pad_w / 2;
+        const int pad_right = pad_w - pad_left;
+        const int pad_top = 0;
+        const int pad_bottom = pad_h;
 
         cv::Mat img1_pad = img1;
         cv::Mat img2_pad = img2;
         if (pad_h > 0 || pad_w > 0)
         {
-            cv::copyMakeBorder(img1, img1_pad, 0, pad_h, 0, pad_w, cv::BORDER_REPLICATE);
-            cv::copyMakeBorder(img2, img2_pad, 0, pad_h, 0, pad_w, cv::BORDER_REPLICATE);
+            // Match RAFT Python InputPadder(mode='kitti'): symmetric left/right, pad only bottom on height.
+            cv::copyMakeBorder(img1, img1_pad, pad_top, pad_bottom, pad_left, pad_right, cv::BORDER_REPLICATE);
+            cv::copyMakeBorder(img2, img2_pad, pad_top, pad_bottom, pad_left, pad_right, cv::BORDER_REPLICATE);
         }
 
         const int h = img1_pad.rows;
@@ -411,6 +432,7 @@ public:
                   << " dtype=" << static_cast<int>(primary_dtype)
                   << " output_hw=" << out_h << "x" << out_w
                   << " input_hw=" << src_h << "x" << src_w
+                  << " pad(lrtb)=" << pad_left << "," << pad_right << "," << pad_top << "," << pad_bottom
                   << std::endl;
 
         if (primary_dtype == nvinfer1::DataType::kFLOAT)
@@ -462,8 +484,7 @@ public:
         }
         if (src_h > out_h || src_w > out_w)
             return false;
-        if (src_h != out_h || src_w != out_w)
-            flow_hw2 = flow_hw2(cv::Rect(0, 0, src_w, src_h)).clone();
+        // Keep padded flow resolution for sparse sampling to match legacy Python RAFT matcher behavior.
         return true;
     }
 
@@ -783,6 +804,14 @@ bool RaftEngineTRT::estimateMatchesBatch(
     batch_matches.clear();
     batch_matches.reserve(batch_i1.size());
     double total_trt_ms = 0.0;
+    const std::string dump_dir = envOrDefault("DEGRAF_DEBUG_DUMP_MATCHES_DIR", "");
+    if (!dump_dir.empty() && !cv::utils::fs::exists(dump_dir))
+    {
+        if (!cv::utils::fs::createDirectories(dump_dir))
+        {
+            std::cerr << "[WARN][RaftEngineTRT] Cannot create DEGRAF_DEBUG_DUMP_MATCHES_DIR: " << dump_dir << std::endl;
+        }
+    }
     for (size_t i = 0; i < batch_i1.size(); ++i)
     {
         const auto &src = batch_points[i];
@@ -847,6 +876,19 @@ bool RaftEngineTRT::estimateMatchesBatch(
         std::cout << "[PROFILE][RaftEngineTRT][Frame " << i << "] src_points=" << src.size()
                   << " matched_points=" << matches.dst_points.size()
                   << " trt_ms=" << trt_ms << std::endl;
+        if (!dump_dir.empty() && cv::utils::fs::exists(dump_dir))
+        {
+            const std::string out_path =
+                cv::utils::fs::join(dump_dir, cv::format("cpp_trt_matches_frame_%06zu.txt", i));
+            if (!dumpMatchesToFile(out_path, matches))
+            {
+                std::cerr << "[WARN][RaftEngineTRT] Failed to dump matches: " << out_path << std::endl;
+            }
+            else
+            {
+                std::cout << "[PROFILE][RaftEngineTRT][Frame " << i << "] dumped_matches=" << out_path << std::endl;
+            }
+        }
         batch_matches.push_back(std::move(matches));
     }
     std::cout << "[PROFILE][RaftEngineTRT] backend=trt total_trt_ms=" << total_trt_ms << std::endl;
