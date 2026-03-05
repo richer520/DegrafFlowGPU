@@ -910,6 +910,11 @@ bool InterpoNetEngineTRT::densifyBatch(
     const std::string edges_dir = envOrDefault("DEGRAF_INTERPONET_EDGES_DIR", "");
     int edges_start_index = 0;
     envInt("DEGRAF_INTERPONET_EDGES_START_INDEX", edges_start_index);
+    const std::string debug_dump_dir = envOrDefault("DEGRAF_INTERPONET_DEBUG_DUMP_DIR", "");
+    int debug_start_index = 0;
+    envInt("DEGRAF_INTERPONET_DEBUG_START_INDEX", debug_start_index);
+    if (!debug_dump_dir.empty() && !cv::utils::fs::exists(debug_dump_dir))
+        cv::utils::fs::createDirectories(debug_dump_dir);
 
     const bool enable_variational = envEnabled("DEGRAF_ENABLE_VARIATIONAL", true);
     const bool profile_stages = envEnabled("DEGRAF_PROFILE_STAGES", true);
@@ -1022,6 +1027,18 @@ bool InterpoNetEngineTRT::densifyBatch(
                       << " edges_source=" << edges_source
                       << " sparse_points=" << batch_matches[i].src_points.size()
                       << std::endl;
+        }
+
+        if (!debug_dump_dir.empty() && cv::utils::fs::exists(debug_dump_dir))
+        {
+            const int frame_id = debug_start_index + static_cast<int>(i);
+            const std::string dump_path =
+                cv::utils::fs::join(debug_dump_dir, cv::format("%06d_trt_dense.flo", frame_id));
+            if (writeFlowFile(dump_path, dense_flow))
+            {
+                std::cout << "[PROFILE][InterpoNetEngineTRT][Frame " << i
+                          << "] dumped_dense_flow=" << dump_path << std::endl;
+            }
         }
         auto interp_end = std::chrono::high_resolution_clock::now();
         total_interpolate_ms += std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(interp_end - interp_start).count();
