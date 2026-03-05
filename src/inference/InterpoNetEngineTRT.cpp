@@ -932,11 +932,13 @@ bool InterpoNetEngineTRT::densifyBatch(
     int variational_applied = 0;
 
 #if DEGRAF_HAVE_TENSORRT
-    InterpoNetTrtRunner trt_runner;
+    // Keep TRT runner alive for process lifetime to avoid teardown-order crashes
+    // between CUDA runtime and static/local object destruction at program exit.
+    static InterpoNetTrtRunner *trt_runner = new InterpoNetTrtRunner();
     bool trt_ready = false;
     if (backend == "trt")
     {
-        trt_ready = trt_runner.init(trt_engine_path);
+        trt_ready = trt_runner->init(trt_engine_path);
         if (!trt_ready && !allow_epic_fallback)
         {
             std::cerr << "[ERROR][InterpoNetEngineTRT] Failed to init TRT engine and EPIC fallback disabled: "
@@ -993,7 +995,7 @@ bool InterpoNetEngineTRT::densifyBatch(
                 low_h,
                 low_w);
             cv::Mat low_flow;
-            if (trt_ready && trt_runner.inferFlow(image_nhwc, mask_nhwc, edges_nhwc, low_h, low_w, low_flow))
+            if (trt_ready && trt_runner->inferFlow(image_nhwc, mask_nhwc, edges_nhwc, low_h, low_w, low_flow))
             {
                 cv::resize(low_flow, dense_flow, batch_i1[i].size(), 0, 0, cv::INTER_CUBIC);
                 interpolate_ok = !dense_flow.empty();

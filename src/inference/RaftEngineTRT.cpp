@@ -793,8 +793,10 @@ bool RaftEngineTRT::estimateMatchesBatch(
     }
 
 #if DEGRAF_HAVE_TENSORRT
-    static RaftTrtRunner runner;
-    if (!runner.init(engine_path))
+    // Keep TRT runner alive for process lifetime to avoid teardown-order crashes
+    // between CUDA runtime and static object destruction at program exit.
+    static RaftTrtRunner *runner = new RaftTrtRunner();
+    if (!runner->init(engine_path))
     {
         std::cerr << "[ERROR][RaftEngineTRT] Failed to initialize TensorRT engine: " << engine_path << std::endl;
         if (!allow_lk_fallback)
@@ -823,7 +825,7 @@ bool RaftEngineTRT::estimateMatchesBatch(
 
         cv::Mat dense_flow;
         const auto t0 = std::chrono::high_resolution_clock::now();
-        if (!runner.inferDenseFlow(batch_i1[i], batch_i2[i], dense_flow))
+        if (!runner->inferDenseFlow(batch_i1[i], batch_i2[i], dense_flow))
         {
             std::cerr << "[ERROR][RaftEngineTRT] TensorRT inference failed on frame " << i << std::endl;
             if (!allow_lk_fallback)
