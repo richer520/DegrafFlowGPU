@@ -41,10 +41,6 @@ def run_case(
         text=True,
     )
     output = proc.stdout
-    if proc.returncode != 0:
-        print(output)
-        raise RuntimeError(f"Command failed with exit code {proc.returncode} for variational={variational}")
-
     metrics = None
     for line in output.splitlines():
         m = SCENEFLOW_RE.search(line)
@@ -57,7 +53,18 @@ def run_case(
                 "TimeMs": float(m.group(5)),
             }
     if metrics is None:
+        print(output)
         raise RuntimeError("Could not find SceneFlow averages in output.")
+    if proc.returncode != 0:
+        # Some runs print final metrics then crash during process teardown (exit 139).
+        # Keep the parsed metrics and continue, but expose a clear warning for traceability.
+        print(
+            f"[WARN] variational={variational} exited with code {proc.returncode}, "
+            "but metrics were parsed successfully. Keeping this run in baseline table."
+        )
+        metrics["ExitCode"] = float(proc.returncode)
+    else:
+        metrics["ExitCode"] = 0.0
     return output, metrics
 
 
@@ -89,7 +96,8 @@ def append_markdown_row(
         f"{m0['AccS']:.2f} | {m1['AccS']:.2f} | "
         f"{m0['AccR']:.2f} | {m1['AccR']:.2f} | "
         f"{m0['Outlier']:.2f} | {m1['Outlier']:.2f} | "
-        f"{m0['TimeMs']:.3f} | {m1['TimeMs']:.3f} | {conclusion} |\n"
+        f"{m0['TimeMs']:.3f} | {m1['TimeMs']:.3f} | "
+        f"{conclusion} (exit0={int(m0.get('ExitCode', 0))}, exit1={int(m1.get('ExitCode', 0))}) |\n"
     )
 
     text = metrics_file.read_text(encoding="utf-8") if metrics_file.exists() else ""
