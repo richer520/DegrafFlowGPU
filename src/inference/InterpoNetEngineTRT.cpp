@@ -97,6 +97,22 @@ bool envFloat(const char *name, float &out_value)
     }
 }
 
+bool loadEdgesDatFile(const std::string &path, int width, int height, cv::Mat &edges_out)
+{
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs.is_open())
+        return false;
+    ifs.seekg(0, std::ios::end);
+    const std::streamoff sz = ifs.tellg();
+    ifs.seekg(0, std::ios::beg);
+    const std::streamoff expected = static_cast<std::streamoff>(width) * height * sizeof(float);
+    if (sz != expected)
+        return false;
+    edges_out = cv::Mat(height, width, CV_32FC1);
+    ifs.read(reinterpret_cast<char *>(edges_out.data), expected);
+    return ifs.good();
+}
+
 #if DEGRAF_HAVE_TENSORRT
 class TrtLogger final : public nvinfer1::ILogger
 {
@@ -442,6 +458,7 @@ void buildInterpoNetInputsFromMatches(
     const cv::Mat &img1,
     const SparseFlowMatches &matches,
     int downscale,
+    const cv::Mat *precomputed_edges_full,
     std::vector<float> &image_nhwc,
     std::vector<float> &mask_nhwc,
     std::vector<float> &edges_nhwc,
@@ -509,14 +526,26 @@ void buildInterpoNetInputsFromMatches(
         }
     }
 
-    cv::Mat gray, edges;
-    if (img1.channels() == 3)
-        cv::cvtColor(img1, gray, cv::COLOR_BGR2GRAY);
-    else
-        gray = img1;
-    cv::Canny(gray, edges, 100, 200);
     cv::Mat edges_f;
-    edges.convertTo(edges_f, CV_32FC1); // keep preserve_range semantics (0~255), closer to Python path
+    if (precomputed_edges_full && !precomputed_edges_full->empty() &&
+        precomputed_edges_full->rows == img1.rows && precomputed_edges_full->cols == img1.cols)
+    {
+        if (precomputed_edges_full->type() == CV_32FC1)
+            edges_f = *precomputed_edges_full;
+        else
+            precomputed_edges_full->convertTo(edges_f, CV_32FC1);
+    }
+    else
+    {
+        cv::Mat gray, edges;
+        if (img1.channels() == 3)
+            cv::cvtColor(img1, gray, cv::COLOR_BGR2GRAY);
+        else
+            gray = img1;
+        cv::Canny(gray, edges, 100, 200);
+        edges.convertTo(edges_f, CV_32FC1); // preserve-range semantics (0~255)
+    }
+
     cv::Mat edges_trim = edges_f(cv::Rect(0, 0, trim_w, trim_h));
     cv::Mat edges_low;
     cv::resize(edges_trim, edges_low, cv::Size(low_w, low_h), 0, 0, cv::INTER_AREA);
@@ -878,6 +907,9 @@ bool InterpoNetEngineTRT::densifyBatch(
     envInt("DEGRAF_INTERPONET_DOWNSCALE", interponet_downscale);
     if (interponet_downscale <= 0)
         interponet_downscale = 8;
+    const std::string edges_dir = envOrDefault("DEGRAF_INTERPONET_EDGES_DIR", "");
+    int edges_start_index = 0;
+    envInt("DEGRAF_INTERPONET_EDGES_START_INDEX", edges_start_index);
 
     const bool enable_variational = envEnabled("DEGRAF_ENABLE_VARIATIONAL", true);
     const bool profile_stages = envEnabled("DEGRAF_PROFILE_STAGES", true);
@@ -927,6 +959,19 @@ bool InterpoNetEngineTRT::densifyBatch(
         auto interp_start = std::chrono::high_resolution_clock::now();
         bool interpolate_ok = false;
         bool used_trt = false;
+        std::string edges_source = "canny";
+        cv::Mat sed_edges;
+        if (!edges_dir.empty())
+        {
+            const int frame_id = edges_start_index + static_cast<int>(i);
+            const std::string p1 = cv::format("%s/%06d_edges.dat", edges_dir.c_str(), frame_id);
+            const std::string p2 = cv::format("%s/%06d_10_edges.dat", edges_dir.c_str(), frame_id);
+            if (loadEdgesDatFile(p1, batch_i1[i].cols, batch_i1[i].rows, sed_edges) ||
+                loadEdgesDatFile(p2, batch_i1[i].cols, batch_i1[i].rows, sed_edges))
+            {
+                edges_source = "sed_bin";
+            }
+        }
         if (backend == "trt")
         {
 #if DEGRAF_HAVE_TENSORRT
@@ -936,6 +981,7 @@ bool InterpoNetEngineTRT::densifyBatch(
                 batch_i1[i],
                 batch_matches[i],
                 interponet_downscale,
+                sed_edges.empty() ? nullptr : &sed_edges,
                 image_nhwc,
                 mask_nhwc,
                 edges_nhwc,
@@ -973,6 +1019,7 @@ bool InterpoNetEngineTRT::densifyBatch(
             std::cout << "[PROFILE][InterpoNetEngineTRT][Frame " << i << "] backend="
                       << ((backend == "trt" && used_trt) ? "trt" : "epic")
                       << " downscale=" << interponet_downscale
+                      << " edges_source=" << edges_source
                       << " sparse_points=" << batch_matches[i].src_points.size()
                       << std::endl;
         }
