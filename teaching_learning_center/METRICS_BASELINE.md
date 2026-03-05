@@ -33,6 +33,11 @@ bash run_gpu_pipeline.sh --start 0 --count 200 --batch-size 20 --methods degraf_
 python3 scripts/variational_ablation.py --start 0 --count 10 --methods degraf_flow_interponet --machine cloud
 ```
 
+```bash
+# 推荐：自动完成 off/full/gate 三组对照（门控阈值默认 3.0）
+python3 scripts/residual_gate_ablation.py --start 0 --count 10 --methods degraf_flow_interponet --machine cloud --gate-thresh 3.0
+```
+
 ## 4) 核心指标定义
 
 - 速度指标：
@@ -64,3 +69,9 @@ python3 scripts/variational_ablation.py --start 0 --count 10 --methods degraf_fl
 补充说明：
 - 脚本会把原始日志保存到 `logs/ablation/`。
 - 若你只想快速 smoke test，可先把 `--count` 改为 `2`，确认流程无误后再跑 `10` 或 `50`。
+
+## 8) variational residual gate 对照实验
+
+| 日期 | commit | 机器 | 配置 | EPE3d(off/full/gate) | Time(ms,off/full/gate) | AccS(off/full/gate) | AccR(off/full/gate) | Outlier(off/full/gate) | 结论 |
+|---|---|---|---|---|---|---|---|---|---|
+| 待跑 | 待填 | cloud | `start=0,count=10,methods=degraf_flow_interponet,gate_thresh=3.0` | 待填 | 待填 | 待填 | 待填 | 待填 | 待填 |
