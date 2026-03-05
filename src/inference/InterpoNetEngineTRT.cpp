@@ -8,15 +8,23 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <memory>
 #include <sstream>
 
 #if DEGRAF_HAVE_INPROCESS_VARIATIONAL
 #include "image.h"
 #include "variational.h"
+#endif
+
+#if DEGRAF_HAVE_TENSORRT
+#include <NvInfer.h>
+#include <cuda_runtime.h>
 #endif
 
 namespace
@@ -50,6 +58,13 @@ std::string envOrDefault(const char *name, const std::string &fallback)
     return fallback;
 }
 
+std::string toLower(std::string s)
+{
+    for (char &c : s)
+        c = static_cast<char>(std::tolower(c));
+    return s;
+}
+
 bool envInt(const char *name, int &out_value)
 {
     const char *value = std::getenv(name);
@@ -80,6 +95,443 @@ bool envFloat(const char *name, float &out_value)
     {
         return false;
     }
+}
+
+#if DEGRAF_HAVE_TENSORRT
+class TrtLogger final : public nvinfer1::ILogger
+{
+public:
+    void log(Severity severity, const char *msg) noexcept override
+    {
+        if (severity > Severity::kWARNING)
+            return;
+        std::cerr << "[TensorRT][InterpoNet] " << msg << std::endl;
+    }
+};
+
+size_t tensorElementSize(nvinfer1::DataType dt)
+{
+    switch (dt)
+    {
+    case nvinfer1::DataType::kFLOAT:
+        return 4;
+    case nvinfer1::DataType::kHALF:
+        return 2;
+    case nvinfer1::DataType::kINT8:
+        return 1;
+    case nvinfer1::DataType::kINT32:
+        return 4;
+#if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR >= 10)
+    case nvinfer1::DataType::kINT64:
+        return 8;
+    case nvinfer1::DataType::kBOOL:
+        return 1;
+#endif
+    default:
+        return 0;
+    }
+}
+
+float halfToFloat(uint16_t h)
+{
+    const uint32_t sign = (h & 0x8000u) << 16;
+    uint32_t exp = (h & 0x7C00u) >> 10;
+    uint32_t mant = h & 0x03FFu;
+
+    uint32_t fbits = 0;
+    if (exp == 0)
+    {
+        if (mant == 0)
+        {
+            fbits = sign;
+        }
+        else
+        {
+            exp = 127 - 15 + 1;
+            while ((mant & 0x0400u) == 0)
+            {
+                mant <<= 1;
+                --exp;
+            }
+            mant &= 0x03FFu;
+            fbits = sign | (exp << 23) | (mant << 13);
+        }
+    }
+    else if (exp == 0x1Fu)
+    {
+        fbits = sign | 0x7F800000u | (mant << 13);
+    }
+    else
+    {
+        exp = exp + (127 - 15);
+        fbits = sign | (exp << 23) | (mant << 13);
+    }
+
+    float out = 0.0f;
+    std::memcpy(&out, &fbits, sizeof(float));
+    return out;
+}
+
+class InterpoNetTrtRunner
+{
+public:
+    bool init(const std::string &engine_path)
+    {
+        if (initialized_ && engine_path_ == engine_path)
+            return true;
+
+        reset();
+        engine_path_ = engine_path;
+
+        std::ifstream file(engine_path, std::ios::binary);
+        if (!file.is_open())
+            return false;
+        file.seekg(0, std::ios::end);
+        const std::streamoff size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        if (size <= 0)
+            return false;
+
+        std::vector<char> data(static_cast<size_t>(size));
+        file.read(data.data(), size);
+        if (!file.good())
+            return false;
+
+        runtime_.reset(nvinfer1::createInferRuntime(logger_));
+        if (!runtime_)
+            return false;
+        engine_.reset(runtime_->deserializeCudaEngine(data.data(), data.size()));
+        if (!engine_)
+            return false;
+        context_.reset(engine_->createExecutionContext());
+        if (!context_)
+            return false;
+
+        if (!resolveBindings())
+            return false;
+
+        initialized_ = true;
+        return true;
+    }
+
+    bool inferFlow(
+        const std::vector<float> &input_image_nhwc,
+        const std::vector<float> &input_mask_nhwc,
+        const std::vector<float> &input_edges_nhwc,
+        int h, int w,
+        cv::Mat &out_flow_hw2)
+    {
+        if (!initialized_ || h <= 0 || w <= 0)
+            return false;
+        const size_t img_elems = static_cast<size_t>(h) * w * 2;
+        const size_t mask_elems = static_cast<size_t>(h) * w;
+        const size_t edges_elems = static_cast<size_t>(h) * w;
+        if (input_image_nhwc.size() != img_elems ||
+            input_mask_nhwc.size() != mask_elems ||
+            input_edges_nhwc.size() != edges_elems)
+            return false;
+
+#if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR >= 10)
+        const nvinfer1::Dims4 img_dims(1, h, w, 2);
+        const nvinfer1::Dims4 mask_dims(1, h, w, 1);
+        const nvinfer1::Dims4 edges_dims(1, h, w, 1);
+        if (!context_->setInputShape(image_name_.c_str(), img_dims) ||
+            !context_->setInputShape(mask_name_.c_str(), mask_dims) ||
+            !context_->setInputShape(edges_name_.c_str(), edges_dims))
+            return false;
+
+        const nvinfer1::Dims out_dims = context_->getTensorShape(output_name_.c_str());
+        if (out_dims.nbDims != 4)
+            return false;
+        const int d1 = out_dims.d[1];
+        const int d2 = out_dims.d[2];
+        const int d3 = out_dims.d[3];
+        if (d1 <= 0 || d2 <= 0 || d3 <= 0)
+            return false;
+        const bool out_nchw = (d1 == 2);
+        const bool out_nhwc = (d3 == 2);
+        if (!out_nchw && !out_nhwc)
+            return false;
+        const int out_h = out_nchw ? d2 : d1;
+        const int out_w = out_nchw ? d3 : d2;
+        const size_t out_elems = static_cast<size_t>(out_h) * out_w * 2;
+        const auto out_dtype = engine_->getTensorDataType(output_name_.c_str());
+        const size_t out_bytes_per_elem = tensorElementSize(out_dtype);
+        if (out_bytes_per_elem == 0)
+            return false;
+
+        void *img_dev = nullptr;
+        void *mask_dev = nullptr;
+        void *edges_dev = nullptr;
+        void *out_dev = nullptr;
+        if (!allocDeviceByName(image_name_, img_elems * sizeof(float), img_dev) ||
+            !allocDeviceByName(mask_name_, mask_elems * sizeof(float), mask_dev) ||
+            !allocDeviceByName(edges_name_, edges_elems * sizeof(float), edges_dev) ||
+            !allocDeviceByName(output_name_, out_elems * out_bytes_per_elem, out_dev))
+            return false;
+
+        if (cudaMemcpy(img_dev, input_image_nhwc.data(), img_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess ||
+            cudaMemcpy(mask_dev, input_mask_nhwc.data(), mask_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess ||
+            cudaMemcpy(edges_dev, input_edges_nhwc.data(), edges_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess)
+            return false;
+
+        if (!context_->setTensorAddress(image_name_.c_str(), img_dev) ||
+            !context_->setTensorAddress(mask_name_.c_str(), mask_dev) ||
+            !context_->setTensorAddress(edges_name_.c_str(), edges_dev) ||
+            !context_->setTensorAddress(output_name_.c_str(), out_dev))
+            return false;
+        if (!context_->enqueueV3(0))
+            return false;
+
+        std::vector<float> out_f32(out_elems, 0.0f);
+        if (out_dtype == nvinfer1::DataType::kFLOAT)
+        {
+            if (cudaMemcpy(out_f32.data(), out_dev, out_elems * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess)
+                return false;
+        }
+        else if (out_dtype == nvinfer1::DataType::kHALF)
+        {
+            std::vector<uint16_t> out_half(out_elems, 0);
+            if (cudaMemcpy(out_half.data(), out_dev, out_elems * sizeof(uint16_t), cudaMemcpyDeviceToHost) != cudaSuccess)
+                return false;
+            for (size_t i = 0; i < out_elems; ++i)
+                out_f32[i] = halfToFloat(out_half[i]);
+        }
+        else
+        {
+            return false;
+        }
+
+        out_flow_hw2 = cv::Mat(out_h, out_w, CV_32FC2, cv::Scalar(0, 0));
+        for (int y = 0; y < out_h; ++y)
+        {
+            cv::Vec2f *row = out_flow_hw2.ptr<cv::Vec2f>(y);
+            for (int x = 0; x < out_w; ++x)
+            {
+                if (out_nhwc)
+                {
+                    const size_t base = (static_cast<size_t>(y) * out_w + x) * 2;
+                    row[x][0] = out_f32[base + 0];
+                    row[x][1] = out_f32[base + 1];
+                }
+                else
+                {
+                    const size_t hw = static_cast<size_t>(y) * out_w + x;
+                    row[x][0] = out_f32[hw];
+                    row[x][1] = out_f32[static_cast<size_t>(out_h) * out_w + hw];
+                }
+            }
+        }
+        return true;
+#else
+        (void)input_image_nhwc;
+        (void)input_mask_nhwc;
+        (void)input_edges_nhwc;
+        (void)h;
+        (void)w;
+        (void)out_flow_hw2;
+        return false;
+#endif
+    }
+
+private:
+    struct TRTDestroy
+    {
+        template <typename T>
+        void operator()(T *obj) const
+        {
+            if (obj)
+#if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR >= 10)
+                delete obj;
+#else
+                obj->destroy();
+#endif
+        }
+    };
+
+    void reset()
+    {
+        for (auto &kv : device_ptrs_)
+        {
+            if (kv.second)
+                cudaFree(kv.second);
+        }
+        device_ptrs_.clear();
+        alloc_bytes_.clear();
+        context_.reset();
+        engine_.reset();
+        runtime_.reset();
+        initialized_ = false;
+        image_name_.clear();
+        mask_name_.clear();
+        edges_name_.clear();
+        output_name_.clear();
+    }
+
+    bool resolveBindings()
+    {
+#if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR >= 10)
+        const int nb = static_cast<int>(engine_->getNbIOTensors());
+        for (int i = 0; i < nb; ++i)
+        {
+            const char *name = engine_->getIOTensorName(i);
+            if (!name)
+                continue;
+            const std::string low = toLower(name);
+            if (engine_->getTensorIOMode(name) == nvinfer1::TensorIOMode::kINPUT)
+            {
+                if (low.find("image_ph") != std::string::npos || (image_name_.empty() && low.find("image") != std::string::npos))
+                    image_name_ = name;
+                else if (low.find("mask_ph") != std::string::npos || (mask_name_.empty() && low.find("mask") != std::string::npos))
+                    mask_name_ = name;
+                else if (low.find("edges_ph") != std::string::npos || (edges_name_.empty() && low.find("edge") != std::string::npos))
+                    edges_name_ = name;
+            }
+            else
+            {
+                if (output_name_.empty())
+                    output_name_ = name;
+            }
+        }
+        return !image_name_.empty() && !mask_name_.empty() && !edges_name_.empty() && !output_name_.empty();
+#else
+        return false;
+#endif
+    }
+
+    bool allocDeviceByName(const std::string &name, size_t bytes, void *&out)
+    {
+        const auto it = device_ptrs_.find(name);
+        if (it != device_ptrs_.end())
+        {
+            if (alloc_bytes_[name] >= bytes)
+            {
+                out = it->second;
+                return true;
+            }
+            cudaFree(it->second);
+            device_ptrs_.erase(it);
+        }
+        void *ptr = nullptr;
+        if (cudaMalloc(&ptr, bytes) != cudaSuccess)
+            return false;
+        device_ptrs_[name] = ptr;
+        alloc_bytes_[name] = bytes;
+        out = ptr;
+        return true;
+    }
+
+private:
+    TrtLogger logger_;
+    std::unique_ptr<nvinfer1::IRuntime, TRTDestroy> runtime_;
+    std::unique_ptr<nvinfer1::ICudaEngine, TRTDestroy> engine_;
+    std::unique_ptr<nvinfer1::IExecutionContext, TRTDestroy> context_;
+    std::string engine_path_;
+    bool initialized_ = false;
+
+    std::string image_name_;
+    std::string mask_name_;
+    std::string edges_name_;
+    std::string output_name_;
+    std::map<std::string, void *> device_ptrs_;
+    std::map<std::string, size_t> alloc_bytes_;
+};
+#endif
+
+void buildInterpoNetInputsFromMatches(
+    const cv::Mat &img1,
+    const SparseFlowMatches &matches,
+    int downscale,
+    std::vector<float> &image_nhwc,
+    std::vector<float> &mask_nhwc,
+    std::vector<float> &edges_nhwc,
+    int &low_h,
+    int &low_w)
+{
+    const int trim_h = img1.rows - (img1.rows % downscale);
+    const int trim_w = img1.cols - (img1.cols % downscale);
+    low_h = trim_h / downscale;
+    low_w = trim_w / downscale;
+    image_nhwc.assign(static_cast<size_t>(low_h) * low_w * 2, 0.0f);
+    mask_nhwc.assign(static_cast<size_t>(low_h) * low_w, -1.0f);
+    edges_nhwc.assign(static_cast<size_t>(low_h) * low_w, 0.0f);
+    std::vector<float> sum_u(static_cast<size_t>(low_h) * low_w, 0.0f);
+    std::vector<float> sum_v(static_cast<size_t>(low_h) * low_w, 0.0f);
+    std::vector<int> cnt(static_cast<size_t>(low_h) * low_w, 0);
+
+    const size_t n = std::min(matches.src_points.size(), matches.dst_points.size());
+    for (size_t i = 0; i < n; ++i)
+    {
+        const cv::Point2f &s = matches.src_points[i];
+        const cv::Point2f &d = matches.dst_points[i];
+        if (s.x < 0 || s.y < 0 || s.x >= trim_w || s.y >= trim_h)
+            continue;
+        const int x = static_cast<int>(s.x) / downscale;
+        const int y = static_cast<int>(s.y) / downscale;
+        if (x < 0 || y < 0 || x >= low_w || y >= low_h)
+            continue;
+        const size_t idx = static_cast<size_t>(y) * low_w + x;
+        sum_u[idx] += (d.x - s.x);
+        sum_v[idx] += (d.y - s.y);
+        cnt[idx] += 1;
+    }
+    for (int y = 0; y < low_h; ++y)
+    {
+        for (int x = 0; x < low_w; ++x)
+        {
+            const size_t idx = static_cast<size_t>(y) * low_w + x;
+            if (cnt[idx] <= 0)
+                continue;
+            const float u = sum_u[idx] / cnt[idx];
+            const float v = sum_v[idx] / cnt[idx];
+            image_nhwc[idx * 2 + 0] = u;
+            image_nhwc[idx * 2 + 1] = v;
+            mask_nhwc[idx] = 1.0f;
+        }
+    }
+
+    cv::Mat gray, edges;
+    if (img1.channels() == 3)
+        cv::cvtColor(img1, gray, cv::COLOR_BGR2GRAY);
+    else
+        gray = img1;
+    cv::Canny(gray, edges, 100, 200);
+    cv::Mat edges_f;
+    edges.convertTo(edges_f, CV_32FC1, 1.0 / 255.0);
+    cv::Mat edges_trim = edges_f(cv::Rect(0, 0, trim_w, trim_h));
+    cv::Mat edges_low;
+    cv::resize(edges_trim, edges_low, cv::Size(low_w, low_h), 0, 0, cv::INTER_LINEAR);
+    for (int y = 0; y < low_h; ++y)
+    {
+        const float *row = edges_low.ptr<float>(y);
+        for (int x = 0; x < low_w; ++x)
+            edges_nhwc[static_cast<size_t>(y) * low_w + x] = row[x];
+    }
+}
+
+bool densifyWithEpic(
+    const cv::Mat &img1,
+    const cv::Mat &img2,
+    const SparseFlowMatches &matches,
+    cv::Mat &dense_flow,
+    int k,
+    float sigma,
+    bool use_post_proc,
+    float fgs_lambda,
+    float fgs_sigma)
+{
+    dense_flow = cv::Mat(img1.size(), CV_32FC2, cv::Scalar(0, 0));
+    if (matches.src_points.empty() || matches.src_points.size() != matches.dst_points.size())
+        return true;
+    cv::Ptr<cv::ximgproc::EdgeAwareInterpolator> interpolator =
+        cv::ximgproc::createEdgeAwareInterpolator();
+    interpolator->setK(k);
+    interpolator->setSigma(sigma);
+    interpolator->setUsePostProcessing(use_post_proc);
+    interpolator->setFGSLambda(fgs_lambda);
+    interpolator->setFGSSigma(fgs_sigma);
+    interpolator->interpolate(img1, matches.src_points, img2, matches.dst_points, dense_flow);
+    return !dense_flow.empty();
 }
 
 double computeSparseResidualPx(const cv::Mat &dense_flow, const SparseFlowMatches &matches)
@@ -398,6 +850,16 @@ bool InterpoNetEngineTRT::densifyBatch(
     const std::vector<SparseFlowMatches> &batch_matches,
     std::vector<cv::Mat> &batch_flows)
 {
+    const std::string backend = envOrDefault("DEGRAF_INTERPONET_BACKEND", "epic");
+    const bool allow_epic_fallback = envEnabled("DEGRAF_ALLOW_EPIC_FALLBACK", true);
+    const std::string trt_engine_path = envOrDefault(
+        "DEGRAF_INTERPONET_ENGINE_PATH",
+        getProjectRoot() + "/external/InterpoNet/models/interponet_kitti_fp32.engine");
+    int interponet_downscale = 8;
+    envInt("DEGRAF_INTERPONET_DOWNSCALE", interponet_downscale);
+    if (interponet_downscale <= 0)
+        interponet_downscale = 8;
+
     const bool enable_variational = envEnabled("DEGRAF_ENABLE_VARIATIONAL", true);
     const bool profile_stages = envEnabled("DEGRAF_PROFILE_STAGES", true);
     const bool residual_gate = envEnabled("DEGRAF_VARIATIONAL_RESIDUAL_GATE", false);
@@ -413,27 +875,87 @@ bool InterpoNetEngineTRT::densifyBatch(
     double total_variational_ms = 0.0;
     int variational_applied = 0;
 
+#if DEGRAF_HAVE_TENSORRT
+    InterpoNetTrtRunner trt_runner;
+    bool trt_ready = false;
+    if (backend == "trt")
+    {
+        trt_ready = trt_runner.init(trt_engine_path);
+        if (!trt_ready && !allow_epic_fallback)
+        {
+            std::cerr << "[ERROR][InterpoNetEngineTRT] Failed to init TRT engine and EPIC fallback disabled: "
+                      << trt_engine_path << std::endl;
+            return false;
+        }
+        if (!trt_ready)
+        {
+            std::cerr << "[WARN][InterpoNetEngineTRT] TRT init failed, fallback to EPIC: "
+                      << trt_engine_path << std::endl;
+        }
+    }
+#else
+    if (backend == "trt" && !allow_epic_fallback)
+    {
+        std::cerr << "[ERROR][InterpoNetEngineTRT] Built without TensorRT and EPIC fallback disabled." << std::endl;
+        return false;
+    }
+#endif
+
     for (size_t i = 0; i < batch_i1.size(); ++i)
     {
-        cv::Mat dense_flow(batch_i1[i].size(), CV_32FC2, cv::Scalar(0, 0));
+        cv::Mat dense_flow;
 
         auto interp_start = std::chrono::high_resolution_clock::now();
-        if (!batch_matches[i].src_points.empty() &&
-            batch_matches[i].src_points.size() == batch_matches[i].dst_points.size())
+        bool interpolate_ok = false;
+        bool used_trt = false;
+        if (backend == "trt")
         {
-            cv::Ptr<cv::ximgproc::EdgeAwareInterpolator> interpolator =
-                cv::ximgproc::createEdgeAwareInterpolator();
-            interpolator->setK(k_);
-            interpolator->setSigma(sigma_);
-            interpolator->setUsePostProcessing(use_post_proc_);
-            interpolator->setFGSLambda(fgs_lambda_);
-            interpolator->setFGSSigma(fgs_sigma_);
-            interpolator->interpolate(
+#if DEGRAF_HAVE_TENSORRT
+            std::vector<float> image_nhwc, mask_nhwc, edges_nhwc;
+            int low_h = 0, low_w = 0;
+            buildInterpoNetInputsFromMatches(
                 batch_i1[i],
-                batch_matches[i].src_points,
-                batch_i2[i],
-                batch_matches[i].dst_points,
-                dense_flow);
+                batch_matches[i],
+                interponet_downscale,
+                image_nhwc,
+                mask_nhwc,
+                edges_nhwc,
+                low_h,
+                low_w);
+            cv::Mat low_flow;
+            if (trt_ready && trt_runner.inferFlow(image_nhwc, mask_nhwc, edges_nhwc, low_h, low_w, low_flow))
+            {
+                cv::resize(low_flow, dense_flow, batch_i1[i].size(), 0, 0, cv::INTER_CUBIC);
+                interpolate_ok = !dense_flow.empty();
+                used_trt = interpolate_ok;
+            }
+#endif
+            if (!interpolate_ok && allow_epic_fallback)
+            {
+                interpolate_ok = densifyWithEpic(
+                    batch_i1[i], batch_i2[i], batch_matches[i], dense_flow,
+                    k_, sigma_, use_post_proc_, fgs_lambda_, fgs_sigma_);
+            }
+        }
+        else
+        {
+            interpolate_ok = densifyWithEpic(
+                batch_i1[i], batch_i2[i], batch_matches[i], dense_flow,
+                k_, sigma_, use_post_proc_, fgs_lambda_, fgs_sigma_);
+        }
+        if (!interpolate_ok)
+        {
+            std::cerr << "[ERROR][InterpoNetEngineTRT] Dense interpolation failed on frame " << i
+                      << " backend=" << backend << std::endl;
+            return false;
+        }
+        if (profile_stages)
+        {
+            std::cout << "[PROFILE][InterpoNetEngineTRT][Frame " << i << "] backend="
+                      << ((backend == "trt" && used_trt) ? "trt" : "epic")
+                      << " downscale=" << interponet_downscale
+                      << " sparse_points=" << batch_matches[i].src_points.size()
+                      << std::endl;
         }
         auto interp_end = std::chrono::high_resolution_clock::now();
         total_interpolate_ms += std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(interp_end - interp_start).count();
