@@ -455,38 +455,57 @@ void buildInterpoNetInputsFromMatches(
     image_nhwc.assign(static_cast<size_t>(low_h) * low_w * 2, 0.0f);
     mask_nhwc.assign(static_cast<size_t>(low_h) * low_w, -1.0f);
     edges_nhwc.assign(static_cast<size_t>(low_h) * low_w, 0.0f);
-    std::vector<float> sum_u(static_cast<size_t>(low_h) * low_w, 0.0f);
-    std::vector<float> sum_v(static_cast<size_t>(low_h) * low_w, 0.0f);
-    std::vector<int> cnt(static_cast<size_t>(low_h) * low_w, 0);
+
+    // Reproduce Python InterpoNet input semantics:
+    // 1) build sparse flow map at full resolution (unknown = NaN, mask=-1)
+    // 2) trim to multiples of downscale
+    // 3) block nanmean downsample for each channel
+    std::vector<float> full_u(static_cast<size_t>(trim_h) * trim_w, 0.0f);
+    std::vector<float> full_v(static_cast<size_t>(trim_h) * trim_w, 0.0f);
+    std::vector<unsigned char> full_valid(static_cast<size_t>(trim_h) * trim_w, 0);
 
     const size_t n = std::min(matches.src_points.size(), matches.dst_points.size());
     for (size_t i = 0; i < n; ++i)
     {
         const cv::Point2f &s = matches.src_points[i];
         const cv::Point2f &d = matches.dst_points[i];
-        if (s.x < 0 || s.y < 0 || s.x >= trim_w || s.y >= trim_h)
+        const int x = static_cast<int>(s.x); // numpy.astype(int) semantics used by Python loader
+        const int y = static_cast<int>(s.y);
+        if (x < 0 || y < 0 || x >= trim_w || y >= trim_h)
             continue;
-        const int x = static_cast<int>(s.x) / downscale;
-        const int y = static_cast<int>(s.y) / downscale;
-        if (x < 0 || y < 0 || x >= low_w || y >= low_h)
-            continue;
-        const size_t idx = static_cast<size_t>(y) * low_w + x;
-        sum_u[idx] += (d.x - s.x);
-        sum_v[idx] += (d.y - s.y);
-        cnt[idx] += 1;
+        const size_t idx = static_cast<size_t>(y) * trim_w + x;
+        full_u[idx] = d.x - s.x;
+        full_v[idx] = d.y - s.y;
+        full_valid[idx] = 1;
     }
-    for (int y = 0; y < low_h; ++y)
+
+    for (int by = 0; by < low_h; ++by)
     {
-        for (int x = 0; x < low_w; ++x)
+        for (int bx = 0; bx < low_w; ++bx)
         {
-            const size_t idx = static_cast<size_t>(y) * low_w + x;
-            if (cnt[idx] <= 0)
+            float sum_u = 0.0f;
+            float sum_v = 0.0f;
+            int cnt = 0;
+            const int y0 = by * downscale;
+            const int x0 = bx * downscale;
+            for (int yy = y0; yy < y0 + downscale; ++yy)
+            {
+                for (int xx = x0; xx < x0 + downscale; ++xx)
+                {
+                    const size_t fi = static_cast<size_t>(yy) * trim_w + xx;
+                    if (!full_valid[fi])
+                        continue;
+                    sum_u += full_u[fi];
+                    sum_v += full_v[fi];
+                    ++cnt;
+                }
+            }
+            if (cnt <= 0)
                 continue;
-            const float u = sum_u[idx] / cnt[idx];
-            const float v = sum_v[idx] / cnt[idx];
-            image_nhwc[idx * 2 + 0] = u;
-            image_nhwc[idx * 2 + 1] = v;
-            mask_nhwc[idx] = 1.0f;
+            const size_t li = static_cast<size_t>(by) * low_w + bx;
+            image_nhwc[li * 2 + 0] = sum_u / static_cast<float>(cnt);
+            image_nhwc[li * 2 + 1] = sum_v / static_cast<float>(cnt);
+            mask_nhwc[li] = 1.0f;
         }
     }
 
@@ -497,10 +516,10 @@ void buildInterpoNetInputsFromMatches(
         gray = img1;
     cv::Canny(gray, edges, 100, 200);
     cv::Mat edges_f;
-    edges.convertTo(edges_f, CV_32FC1, 1.0 / 255.0);
+    edges.convertTo(edges_f, CV_32FC1); // keep preserve_range semantics (0~255), closer to Python path
     cv::Mat edges_trim = edges_f(cv::Rect(0, 0, trim_w, trim_h));
     cv::Mat edges_low;
-    cv::resize(edges_trim, edges_low, cv::Size(low_w, low_h), 0, 0, cv::INTER_LINEAR);
+    cv::resize(edges_trim, edges_low, cv::Size(low_w, low_h), 0, 0, cv::INTER_AREA);
     for (int y = 0; y < low_h; ++y)
     {
         const float *row = edges_low.ptr<float>(y);
