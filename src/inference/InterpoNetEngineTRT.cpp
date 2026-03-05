@@ -871,14 +871,39 @@ bool runVariationalRefineInProcess(const cv::Mat &img1, const cv::Mat &img2, cv:
 bool runVariationalRefine(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &dense_flow, size_t idx)
 {
     const std::string mode = envOrDefault("DEGRAF_VARIATIONAL_MODE", "external");
+    static bool logged_mode_once = false;
+    if (!logged_mode_once)
+    {
+        std::cout << "[PROFILE][InterpoNetEngineTRT][Variational] requested_mode=" << mode << std::endl;
+        logged_mode_once = true;
+    }
     if (mode == "external")
-        return runVariationalRefineExternal(img1, img2, dense_flow, idx);
+    {
+        const bool ok = runVariationalRefineExternal(img1, img2, dense_flow, idx);
+        if (!ok)
+            std::cerr << "[WARN][InterpoNetEngineTRT][Variational] external refine failed." << std::endl;
+        return ok;
+    }
 
 #if DEGRAF_HAVE_INPROCESS_VARIATIONAL
     if (runVariationalRefineInProcess(img1, img2, dense_flow))
+    {
+        static bool logged_inproc_once = false;
+        if (!logged_inproc_once)
+        {
+            std::cout << "[PROFILE][InterpoNetEngineTRT][Variational] using inprocess backend." << std::endl;
+            logged_inproc_once = true;
+        }
         return true;
+    }
+    std::cerr << "[WARN][InterpoNetEngineTRT][Variational] inprocess refine failed, fallback to external." << std::endl;
+#else
+    std::cerr << "[WARN][InterpoNetEngineTRT][Variational] inprocess requested but binary has no inprocess support, fallback to external." << std::endl;
 #endif
-    return runVariationalRefineExternal(img1, img2, dense_flow, idx);
+    const bool ok = runVariationalRefineExternal(img1, img2, dense_flow, idx);
+    if (!ok)
+        std::cerr << "[WARN][InterpoNetEngineTRT][Variational] external fallback refine failed." << std::endl;
+    return ok;
 }
 } // namespace
 
