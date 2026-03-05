@@ -55,6 +55,7 @@ if command -v nvcc >/dev/null 2>&1; then
   mkdir -p "${BUILD_DIR}"
   cd "${BUILD_DIR}"
   CMAKE_EXTRA_ARGS="${DEGRAF_CMAKE_EXTRA_ARGS:-}"
+  BUILD_TYPE="${DEGRAF_CMAKE_BUILD_TYPE:-Release}"
   if [[ "${CMAKE_EXTRA_ARGS}" != *"TENSORRT_INCLUDE_DIR"* ]]; then
     TRT_INC=""
     for p in \
@@ -96,21 +97,24 @@ if command -v nvcc >/dev/null 2>&1; then
     fi
   fi
   echo "[INFO] CUDA toolkit detected, building with USE_CUDA=ON"
+  echo "[INFO] CMAKE_BUILD_TYPE=${BUILD_TYPE}"
   if [ -n "${CMAKE_EXTRA_ARGS}" ]; then
     echo "[INFO] Additional CMake args: ${CMAKE_EXTRA_ARGS}"
   fi
-  cmake .. -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75 ${CMAKE_EXTRA_ARGS}
+  cmake .. -DUSE_CUDA=ON -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" -DCMAKE_CUDA_ARCHITECTURES=75 ${CMAKE_EXTRA_ARGS}
 else
   if [ "${DEGRAF_ALLOW_CPU_FALLBACK}" = "1" ]; then
     BUILD_DIR="${DEGRAF_PROJECT_ROOT}/build_cpu"
     mkdir -p "${BUILD_DIR}"
     cd "${BUILD_DIR}"
     CMAKE_EXTRA_ARGS="${DEGRAF_CMAKE_EXTRA_ARGS:-}"
+    BUILD_TYPE="${DEGRAF_CMAKE_BUILD_TYPE:-Release}"
     echo "[WARN] nvcc not found, falling back to USE_CUDA=OFF (DEGRAF_ALLOW_CPU_FALLBACK=1)"
+    echo "[INFO] CMAKE_BUILD_TYPE=${BUILD_TYPE}"
     if [ -n "${CMAKE_EXTRA_ARGS}" ]; then
       echo "[INFO] Additional CMake args: ${CMAKE_EXTRA_ARGS}"
     fi
-    cmake .. -DUSE_CUDA=OFF ${CMAKE_EXTRA_ARGS}
+    cmake .. -DUSE_CUDA=OFF -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" ${CMAKE_EXTRA_ARGS}
   else
     echo "[ERROR] nvcc not found. Refusing CPU fallback because DEGRAF_ALLOW_CPU_FALLBACK=0."
     echo "[ERROR] Install CUDA toolkit or explicitly set DEGRAF_ALLOW_CPU_FALLBACK=1."
