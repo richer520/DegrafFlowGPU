@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Dict, Tuple
 
 
 SCENEFLOW_RE = re.compile(
@@ -14,7 +15,9 @@ SCENEFLOW_RE = re.compile(
 )
 
 
-def run_case(project_root: Path, variational: int, start: int, count: int, methods: str) -> tuple[str, dict]:
+def run_case(
+    project_root: Path, variational: int, start: int, count: int, methods: str
+) -> Tuple[str, Dict[str, float]]:
     cmd = [
         "bash",
         "run_gpu_pipeline.sh",
