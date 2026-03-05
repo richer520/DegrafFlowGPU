@@ -12,7 +12,24 @@ export DEGRAF_INFERENCE_MODE="${DEGRAF_INFERENCE_MODE:-cpp}"
 export DEGRAF_ALLOW_CPU_FALLBACK="${DEGRAF_ALLOW_CPU_FALLBACK:-0}"
 export DEGRAF_RAFT_BACKEND="${DEGRAF_RAFT_BACKEND:-trt}"
 export DEGRAF_ALLOW_LK_FALLBACK="${DEGRAF_ALLOW_LK_FALLBACK:-0}"
-export DEGRAF_RAFT_ENGINE_PATH="${DEGRAF_RAFT_ENGINE_PATH:-${DEGRAF_PROJECT_ROOT}/external/RAFT/models/raft_kitti_fp16.engine}"
+if [ -z "${DEGRAF_RAFT_ENGINE_PATH:-}" ]; then
+  if [ -f "${DEGRAF_PROJECT_ROOT}/external/RAFT/models/raft_kitti_debug_fp32.engine" ]; then
+    export DEGRAF_RAFT_ENGINE_PATH="${DEGRAF_PROJECT_ROOT}/external/RAFT/models/raft_kitti_debug_fp32.engine"
+  else
+    export DEGRAF_RAFT_ENGINE_PATH="${DEGRAF_PROJECT_ROOT}/external/RAFT/models/raft_kitti_fp16.engine"
+  fi
+fi
+export DEGRAF_INTERPONET_BACKEND="${DEGRAF_INTERPONET_BACKEND:-trt}"
+export DEGRAF_ALLOW_EPIC_FALLBACK="${DEGRAF_ALLOW_EPIC_FALLBACK:-1}"
+if [ -z "${DEGRAF_INTERPONET_ENGINE_PATH:-}" ]; then
+  export DEGRAF_INTERPONET_ENGINE_PATH="${DEGRAF_PROJECT_ROOT}/external/InterpoNet/models/interponet_kitti_fp32.engine"
+fi
+export DEGRAF_INTERPONET_DOWNSCALE="${DEGRAF_INTERPONET_DOWNSCALE:-8}"
+if [ -z "${DEGRAF_INTERPONET_EDGES_DIR:-}" ] && [ -d "${DEGRAF_PROJECT_ROOT}/external/InterpoNet/data/interponet_input" ]; then
+  export DEGRAF_INTERPONET_EDGES_DIR="${DEGRAF_PROJECT_ROOT}/external/InterpoNet/data/interponet_input"
+fi
+export DEGRAF_INTERPONET_EDGES_START_INDEX="${DEGRAF_INTERPONET_EDGES_START_INDEX:-0}"
+export DEGRAF_ENABLE_VARIATIONAL="${DEGRAF_ENABLE_VARIATIONAL:-1}"
 
 echo "[INFO] DEGRAF_PROJECT_ROOT=${DEGRAF_PROJECT_ROOT}"
 echo "[INFO] DEGRAF_DATA_PATH=${DEGRAF_DATA_PATH}"
@@ -22,6 +39,13 @@ echo "[INFO] DEGRAF_ALLOW_CPU_FALLBACK=${DEGRAF_ALLOW_CPU_FALLBACK}"
 echo "[INFO] DEGRAF_RAFT_BACKEND=${DEGRAF_RAFT_BACKEND}"
 echo "[INFO] DEGRAF_ALLOW_LK_FALLBACK=${DEGRAF_ALLOW_LK_FALLBACK}"
 echo "[INFO] DEGRAF_RAFT_ENGINE_PATH=${DEGRAF_RAFT_ENGINE_PATH}"
+echo "[INFO] DEGRAF_INTERPONET_BACKEND=${DEGRAF_INTERPONET_BACKEND}"
+echo "[INFO] DEGRAF_INTERPONET_ENGINE_PATH=${DEGRAF_INTERPONET_ENGINE_PATH}"
+echo "[INFO] DEGRAF_INTERPONET_DOWNSCALE=${DEGRAF_INTERPONET_DOWNSCALE}"
+echo "[INFO] DEGRAF_INTERPONET_EDGES_DIR=${DEGRAF_INTERPONET_EDGES_DIR:-<empty>}"
+echo "[INFO] DEGRAF_INTERPONET_EDGES_START_INDEX=${DEGRAF_INTERPONET_EDGES_START_INDEX}"
+echo "[INFO] DEGRAF_ALLOW_EPIC_FALLBACK=${DEGRAF_ALLOW_EPIC_FALLBACK}"
+echo "[INFO] DEGRAF_ENABLE_VARIATIONAL=${DEGRAF_ENABLE_VARIATIONAL}"
 
 mkdir -p "${DEGRAF_PROJECT_ROOT}/data/outputs"
 if command -v nvcc >/dev/null 2>&1; then
@@ -29,6 +53,46 @@ if command -v nvcc >/dev/null 2>&1; then
   mkdir -p "${BUILD_DIR}"
   cd "${BUILD_DIR}"
   CMAKE_EXTRA_ARGS="${DEGRAF_CMAKE_EXTRA_ARGS:-}"
+  if [[ "${CMAKE_EXTRA_ARGS}" != *"TENSORRT_INCLUDE_DIR"* ]]; then
+    TRT_INC=""
+    for p in \
+      "/usr/include/x86_64-linux-gnu/NvInfer.h" \
+      "/usr/include/NvInfer.h" \
+      "/root/autodl-tmp/pydeps/tensorrt/include/NvInfer.h" \
+      "/root/miniconda3/include/NvInfer.h"; do
+      if [ -f "$p" ]; then
+        TRT_INC="$(dirname "$p")"
+        break
+      fi
+    done
+    TRT_NVINFER=""
+    for p in \
+      "/usr/lib/x86_64-linux-gnu/libnvinfer.so.10" \
+      "/root/autodl-tmp/pydeps/tensorrt_libs/libnvinfer.so.10" \
+      "/root/miniconda3/lib/python3.8/site-packages/tensorrt_libs/libnvinfer.so.10"; do
+      if [ -f "$p" ]; then
+        TRT_NVINFER="$p"
+        break
+      fi
+    done
+    TRT_NVONNX=""
+    for p in \
+      "/usr/lib/x86_64-linux-gnu/libnvonnxparser.so.10.13.0" \
+      "/usr/lib/x86_64-linux-gnu/libnvonnxparser.so.10" \
+      "/root/autodl-tmp/pydeps/tensorrt_libs/libnvonnxparser.so.10.13.0" \
+      "/root/autodl-tmp/pydeps/tensorrt_libs/libnvonnxparser.so.10" \
+      "/root/miniconda3/lib/python3.8/site-packages/tensorrt_libs/libnvonnxparser.so.10"; do
+      if [ -f "$p" ]; then
+        TRT_NVONNX="$p"
+        break
+      fi
+    done
+    if [ -n "$TRT_INC" ] && [ -n "$TRT_NVINFER" ] && [ -n "$TRT_NVONNX" ]; then
+      CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DTENSORRT_INCLUDE_DIR=${TRT_INC} -DTENSORRT_NVINFER_LIB=${TRT_NVINFER} -DTENSORRT_NVONNXPARSER_LIB=${TRT_NVONNX}"
+      export LD_LIBRARY_PATH="$(dirname "$TRT_NVINFER"):$(dirname "$TRT_NVONNX"):${LD_LIBRARY_PATH:-}"
+      echo "[INFO] Auto-detected TensorRT paths."
+    fi
+  fi
   echo "[INFO] CUDA toolkit detected, building with USE_CUDA=ON"
   if [ -n "${CMAKE_EXTRA_ARGS}" ]; then
     echo "[INFO] Additional CMake args: ${CMAKE_EXTRA_ARGS}"
