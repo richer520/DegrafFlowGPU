@@ -97,6 +97,41 @@ bool envFloat(const char *name, float &out_value)
     }
 }
 
+void resizeInterpoInput2Ch(const std::vector<float> &src, int src_h, int src_w,
+                           std::vector<float> &dst, int dst_h, int dst_w)
+{
+    dst.assign(static_cast<size_t>(dst_h) * dst_w * 2, 0.0f);
+    const int copy_h = std::min(src_h, dst_h);
+    const int copy_w = std::min(src_w, dst_w);
+    for (int y = 0; y < copy_h; ++y)
+    {
+        for (int x = 0; x < copy_w; ++x)
+        {
+            const size_t s = (static_cast<size_t>(y) * src_w + x) * 2;
+            const size_t d = (static_cast<size_t>(y) * dst_w + x) * 2;
+            dst[d + 0] = src[s + 0];
+            dst[d + 1] = src[s + 1];
+        }
+    }
+}
+
+void resizeInterpoInput1Ch(const std::vector<float> &src, int src_h, int src_w,
+                           std::vector<float> &dst, int dst_h, int dst_w, float fill_value)
+{
+    dst.assign(static_cast<size_t>(dst_h) * dst_w, fill_value);
+    const int copy_h = std::min(src_h, dst_h);
+    const int copy_w = std::min(src_w, dst_w);
+    for (int y = 0; y < copy_h; ++y)
+    {
+        for (int x = 0; x < copy_w; ++x)
+        {
+            const size_t s = static_cast<size_t>(y) * src_w + x;
+            const size_t d = static_cast<size_t>(y) * dst_w + x;
+            dst[d] = src[s];
+        }
+    }
+}
+
 bool loadEdgesDatFile(const std::string &path, int width, int height, cv::Mat &edges_out)
 {
     std::ifstream ifs(path, std::ios::binary);
@@ -239,18 +274,54 @@ public:
     {
         if (!initialized_ || h <= 0 || w <= 0)
             return false;
-        const size_t img_elems = static_cast<size_t>(h) * w * 2;
-        const size_t mask_elems = static_cast<size_t>(h) * w;
-        const size_t edges_elems = static_cast<size_t>(h) * w;
-        if (input_image_nhwc.size() != img_elems ||
-            input_mask_nhwc.size() != mask_elems ||
-            input_edges_nhwc.size() != edges_elems)
+        const size_t img_elems_src = static_cast<size_t>(h) * w * 2;
+        const size_t mask_elems_src = static_cast<size_t>(h) * w;
+        const size_t edges_elems_src = static_cast<size_t>(h) * w;
+        if (input_image_nhwc.size() != img_elems_src ||
+            input_mask_nhwc.size() != mask_elems_src ||
+            input_edges_nhwc.size() != edges_elems_src)
             return false;
 
 #if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR >= 10)
-        const nvinfer1::Dims4 img_dims(1, h, w, 2);
-        const nvinfer1::Dims4 mask_dims(1, h, w, 1);
-        const nvinfer1::Dims4 edges_dims(1, h, w, 1);
+        int run_h = h;
+        int run_w = w;
+        const nvinfer1::Dims model_img_dims = engine_->getTensorShape(image_name_.c_str());
+        if (model_img_dims.nbDims == 4 && model_img_dims.d[1] > 0 && model_img_dims.d[2] > 0)
+        {
+            run_h = model_img_dims.d[1];
+            run_w = model_img_dims.d[2];
+        }
+
+        std::vector<float> image_for_trt;
+        std::vector<float> mask_for_trt;
+        std::vector<float> edges_for_trt;
+        const std::vector<float> *image_ptr = &input_image_nhwc;
+        const std::vector<float> *mask_ptr = &input_mask_nhwc;
+        const std::vector<float> *edges_ptr = &input_edges_nhwc;
+        if (run_h != h || run_w != w)
+        {
+            static bool logged_shape_adapt_once = false;
+            if (!logged_shape_adapt_once)
+            {
+                std::cerr << "[WARN][InterpoNetEngineTRT] Input low-res shape " << h << "x" << w
+                          << " mismatches static TRT shape " << run_h << "x" << run_w
+                          << ". Adapting by crop/pad to keep TRT path active." << std::endl;
+                logged_shape_adapt_once = true;
+            }
+            resizeInterpoInput2Ch(input_image_nhwc, h, w, image_for_trt, run_h, run_w);
+            resizeInterpoInput1Ch(input_mask_nhwc, h, w, mask_for_trt, run_h, run_w, -1.0f);
+            resizeInterpoInput1Ch(input_edges_nhwc, h, w, edges_for_trt, run_h, run_w, 0.0f);
+            image_ptr = &image_for_trt;
+            mask_ptr = &mask_for_trt;
+            edges_ptr = &edges_for_trt;
+        }
+
+        const size_t img_elems = static_cast<size_t>(run_h) * run_w * 2;
+        const size_t mask_elems = static_cast<size_t>(run_h) * run_w;
+        const size_t edges_elems = static_cast<size_t>(run_h) * run_w;
+        const nvinfer1::Dims4 img_dims(1, run_h, run_w, 2);
+        const nvinfer1::Dims4 mask_dims(1, run_h, run_w, 1);
+        const nvinfer1::Dims4 edges_dims(1, run_h, run_w, 1);
         if (!context_->setInputShape(image_name_.c_str(), img_dims) ||
             !context_->setInputShape(mask_name_.c_str(), mask_dims) ||
             !context_->setInputShape(edges_name_.c_str(), edges_dims))
@@ -286,9 +357,9 @@ public:
             !allocDeviceByName(output_name_, out_elems * out_bytes_per_elem, out_dev))
             return false;
 
-        if (cudaMemcpy(img_dev, input_image_nhwc.data(), img_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess ||
-            cudaMemcpy(mask_dev, input_mask_nhwc.data(), mask_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess ||
-            cudaMemcpy(edges_dev, input_edges_nhwc.data(), edges_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess)
+        if (cudaMemcpy(img_dev, image_ptr->data(), img_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess ||
+            cudaMemcpy(mask_dev, mask_ptr->data(), mask_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess ||
+            cudaMemcpy(edges_dev, edges_ptr->data(), edges_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess)
             return false;
 
         if (!context_->setTensorAddress(image_name_.c_str(), img_dev) ||
