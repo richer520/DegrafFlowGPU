@@ -1004,6 +1004,7 @@ bool InterpoNetEngineTRT::densifyBatch(
     if (interponet_downscale <= 0)
         interponet_downscale = 8;
     const std::string edges_dir = envOrDefault("DEGRAF_INTERPONET_EDGES_DIR", "");
+    const bool require_sed_edges = envEnabled("DEGRAF_INTERPONET_REQUIRE_SED", false);
     int edges_start_index = 0;
     envInt("DEGRAF_INTERPONET_EDGES_START_INDEX", edges_start_index);
     const std::string debug_dump_dir = envOrDefault("DEGRAF_INTERPONET_DEBUG_DUMP_DIR", "");
@@ -1064,16 +1065,27 @@ bool InterpoNetEngineTRT::densifyBatch(
         bool used_trt = false;
         std::string edges_source = "canny";
         cv::Mat sed_edges;
+        std::string sed_try_p1;
+        std::string sed_try_p2;
         if (!edges_dir.empty())
         {
             const int frame_id = edges_start_index + static_cast<int>(i);
-            const std::string p1 = cv::format("%s/%06d_edges.dat", edges_dir.c_str(), frame_id);
-            const std::string p2 = cv::format("%s/%06d_10_edges.dat", edges_dir.c_str(), frame_id);
-            if (loadEdgesDatFile(p1, batch_i1[i].cols, batch_i1[i].rows, sed_edges) ||
-                loadEdgesDatFile(p2, batch_i1[i].cols, batch_i1[i].rows, sed_edges))
+            sed_try_p1 = cv::format("%s/%06d_edges.dat", edges_dir.c_str(), frame_id);
+            sed_try_p2 = cv::format("%s/%06d_10_edges.dat", edges_dir.c_str(), frame_id);
+            if (loadEdgesDatFile(sed_try_p1, batch_i1[i].cols, batch_i1[i].rows, sed_edges) ||
+                loadEdgesDatFile(sed_try_p2, batch_i1[i].cols, batch_i1[i].rows, sed_edges))
             {
                 edges_source = "sed_bin";
             }
+        }
+        if (require_sed_edges && edges_source != "sed_bin")
+        {
+            std::cerr << "[ERROR][InterpoNetEngineTRT] DEGRAF_INTERPONET_REQUIRE_SED=1 but SED edges.dat is missing/invalid"
+                      << " for frame " << i
+                      << " (searched: " << (sed_try_p1.empty() ? "<no_dir>" : sed_try_p1)
+                      << ", " << (sed_try_p2.empty() ? "<no_dir>" : sed_try_p2) << ")"
+                      << ". Refusing Canny fallback." << std::endl;
+            return false;
         }
         if (backend == "trt")
         {
