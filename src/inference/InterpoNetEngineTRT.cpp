@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -132,6 +133,49 @@ void resizeInterpoInput1Ch(const std::vector<float> &src, int src_h, int src_w,
     }
 }
 
+bool inferEdgesDatDimsFromElementCount(std::streamoff elements, int target_w, int target_h, int &out_w, int &out_h)
+{
+    if (elements <= 0 || target_w <= 0 || target_h <= 0)
+        return false;
+    const double target_ratio = static_cast<double>(target_w) / static_cast<double>(target_h);
+    double best_score = std::numeric_limits<double>::max();
+    int best_w = -1;
+    int best_h = -1;
+
+    for (std::streamoff h = 1; h * h <= elements; ++h)
+    {
+        if (elements % h != 0)
+            continue;
+        const std::streamoff w = elements / h;
+        const int cand_w1 = static_cast<int>(w);
+        const int cand_h1 = static_cast<int>(h);
+        const int cand_w2 = static_cast<int>(h);
+        const int cand_h2 = static_cast<int>(w);
+
+        auto try_candidate = [&](int cw, int ch) {
+            if (cw <= 0 || ch <= 0)
+                return;
+            const double ratio = static_cast<double>(cw) / static_cast<double>(ch);
+            const double score = std::fabs(ratio - target_ratio);
+            if (score < best_score)
+            {
+                best_score = score;
+                best_w = cw;
+                best_h = ch;
+            }
+        };
+
+        try_candidate(cand_w1, cand_h1);
+        try_candidate(cand_w2, cand_h2);
+    }
+
+    if (best_w <= 0 || best_h <= 0)
+        return false;
+    out_w = best_w;
+    out_h = best_h;
+    return true;
+}
+
 bool loadEdgesDatFile(const std::string &path, int width, int height, cv::Mat &edges_out)
 {
     std::ifstream ifs(path, std::ios::binary);
@@ -140,11 +184,40 @@ bool loadEdgesDatFile(const std::string &path, int width, int height, cv::Mat &e
     ifs.seekg(0, std::ios::end);
     const std::streamoff sz = ifs.tellg();
     ifs.seekg(0, std::ios::beg);
-    const std::streamoff expected = static_cast<std::streamoff>(width) * height * sizeof(float);
-    if (sz != expected)
+
+    if (sz <= 0 || (sz % static_cast<std::streamoff>(sizeof(float))) != 0)
         return false;
-    edges_out = cv::Mat(height, width, CV_32FC1);
-    ifs.read(reinterpret_cast<char *>(edges_out.data), expected);
+
+    const std::streamoff float_count = sz / static_cast<std::streamoff>(sizeof(float));
+    int src_w = width;
+    int src_h = height;
+    if (float_count != static_cast<std::streamoff>(width) * height)
+    {
+        if (!inferEdgesDatDimsFromElementCount(float_count, width, height, src_w, src_h))
+            return false;
+    }
+
+    cv::Mat src(src_h, src_w, CV_32FC1);
+    ifs.read(reinterpret_cast<char *>(src.data), sz);
+    if (!ifs.good())
+        return false;
+
+    if (src_w == width && src_h == height)
+    {
+        edges_out = src;
+    }
+    else
+    {
+        cv::resize(src, edges_out, cv::Size(width, height), 0, 0, cv::INTER_AREA);
+        static bool logged_edges_resize_once = false;
+        if (!logged_edges_resize_once)
+        {
+            std::cerr << "[WARN][InterpoNetEngineTRT] Resized SED edges.dat from "
+                      << src_w << "x" << src_h << " to " << width << "x" << height
+                      << " to match current frame size." << std::endl;
+            logged_edges_resize_once = true;
+        }
+    }
     return ifs.good();
 }
 
