@@ -98,6 +98,14 @@ bool envFloat(const char *name, float &out_value)
     }
 }
 
+struct VariationalOverride
+{
+    bool enabled = false;
+    int niter_outer = -1;
+    float gamma = -1.0f;
+    float sigma = -1.0f;
+};
+
 void resizeInterpoInput2Ch(const std::vector<float> &src, int src_h, int src_w,
                            std::vector<float> &dst, int dst_h, int dst_w)
 {
@@ -800,7 +808,8 @@ cv::Mat readFlowFile(const std::string &path)
     return flow;
 }
 
-bool runVariationalRefineExternal(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &dense_flow, size_t idx)
+bool runVariationalRefineExternal(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &dense_flow,
+                                  size_t idx, const VariationalOverride *override_params)
 {
     const std::string project_root = getProjectRoot();
     const std::string variational_bin =
@@ -830,15 +839,27 @@ bool runVariationalRefineExternal(const cv::Mat &img1, const cv::Mat &img2, cv::
     std::ostringstream args;
     int niter_outer = 0;
     float alpha = 0.0f, gamma = 0.0f, delta = 0.0f, sigma = 0.0f;
-    if (envInt("DEGRAF_VARIATIONAL_NITER_OUTER", niter_outer))
+    if (override_params && override_params->enabled && override_params->niter_outer > 0)
+        niter_outer = override_params->niter_outer;
+    else if (!envInt("DEGRAF_VARIATIONAL_NITER_OUTER", niter_outer))
+        niter_outer = 0;
+    if (niter_outer > 0)
         args << " -iter " << niter_outer;
     if (envFloat("DEGRAF_VARIATIONAL_ALPHA", alpha))
         args << " -alpha " << alpha;
-    if (envFloat("DEGRAF_VARIATIONAL_GAMMA", gamma))
+    if (override_params && override_params->enabled && override_params->gamma >= 0.0f)
+        gamma = override_params->gamma;
+    else if (!envFloat("DEGRAF_VARIATIONAL_GAMMA", gamma))
+        gamma = -1.0f;
+    if (gamma >= 0.0f)
         args << " -gamma " << gamma;
     if (envFloat("DEGRAF_VARIATIONAL_DELTA", delta))
         args << " -delta " << delta;
-    if (envFloat("DEGRAF_VARIATIONAL_SIGMA", sigma))
+    if (override_params && override_params->enabled && override_params->sigma > 0.0f)
+        sigma = override_params->sigma;
+    else if (!envFloat("DEGRAF_VARIATIONAL_SIGMA", sigma))
+        sigma = -1.0f;
+    if (sigma > 0.0f)
         args << " -sigma " << sigma;
 
     const std::string cmd =
@@ -984,7 +1005,8 @@ void applyVariationalOverridesFromEnv(variational_params_t &params)
         params.sor_omega = sor_omega;
 }
 
-bool runVariationalRefineInProcess(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &dense_flow)
+bool runVariationalRefineInProcess(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &dense_flow,
+                                   const VariationalOverride *override_params)
 {
     if (dense_flow.empty() || dense_flow.type() != CV_32FC2)
         return false;
@@ -1000,6 +1022,15 @@ bool runVariationalRefineInProcess(const cv::Mat &img1, const cv::Mat &img2, cv:
     variational_params_default(&params);
     applyPresetFromDataset(params, envOrDefault("DEGRAF_VARIATIONAL_DATASET", "kitti"));
     applyVariationalOverridesFromEnv(params);
+    if (override_params && override_params->enabled)
+    {
+        if (override_params->niter_outer > 0)
+            params.niter_outer = override_params->niter_outer;
+        if (override_params->gamma >= 0.0f)
+            params.gamma = override_params->gamma;
+        if (override_params->sigma > 0.0f)
+            params.sigma = override_params->sigma;
+    }
     variational(wx, wy, im1, im2, &params);
 
     dense_flow = variationalImagesToFlowMat(wx, wy);
@@ -1012,7 +1043,8 @@ bool runVariationalRefineInProcess(const cv::Mat &img1, const cv::Mat &img2, cv:
 }
 #endif
 
-bool runVariationalRefine(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &dense_flow, size_t idx)
+bool runVariationalRefine(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &dense_flow,
+                          size_t idx, const VariationalOverride *override_params)
 {
     const std::string mode = envOrDefault("DEGRAF_VARIATIONAL_MODE", "external");
     static bool logged_mode_once = false;
@@ -1023,14 +1055,14 @@ bool runVariationalRefine(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &den
     }
     if (mode == "external")
     {
-        const bool ok = runVariationalRefineExternal(img1, img2, dense_flow, idx);
+        const bool ok = runVariationalRefineExternal(img1, img2, dense_flow, idx, override_params);
         if (!ok)
             std::cerr << "[WARN][InterpoNetEngineTRT][Variational] external refine failed." << std::endl;
         return ok;
     }
 
 #if DEGRAF_HAVE_INPROCESS_VARIATIONAL
-    if (runVariationalRefineInProcess(img1, img2, dense_flow))
+    if (runVariationalRefineInProcess(img1, img2, dense_flow, override_params))
     {
         static bool logged_inproc_once = false;
         if (!logged_inproc_once)
@@ -1044,7 +1076,7 @@ bool runVariationalRefine(const cv::Mat &img1, const cv::Mat &img2, cv::Mat &den
 #else
     std::cerr << "[WARN][InterpoNetEngineTRT][Variational] inprocess requested but binary has no inprocess support, fallback to external." << std::endl;
 #endif
-    const bool ok = runVariationalRefineExternal(img1, img2, dense_flow, idx);
+    const bool ok = runVariationalRefineExternal(img1, img2, dense_flow, idx, override_params);
     if (!ok)
         std::cerr << "[WARN][InterpoNetEngineTRT][Variational] external fallback refine failed." << std::endl;
     return ok;
@@ -1089,8 +1121,19 @@ bool InterpoNetEngineTRT::densifyBatch(
     const bool enable_variational = envEnabled("DEGRAF_ENABLE_VARIATIONAL", true);
     const bool profile_stages = envEnabled("DEGRAF_PROFILE_STAGES", true);
     const bool residual_gate = envEnabled("DEGRAF_VARIATIONAL_RESIDUAL_GATE", false);
+    const bool hard_mode = envEnabled("DEGRAF_VARIATIONAL_HARD_MODE", false);
     float residual_thresh = 3.0f;
     envFloat("DEGRAF_VARIATIONAL_RESIDUAL_THRESH", residual_thresh);
+    int hard_min_sparse_points = 4500;
+    envInt("DEGRAF_VARIATIONAL_HARD_MIN_POINTS", hard_min_sparse_points);
+    float hard_residual_thresh = 6.0f;
+    envFloat("DEGRAF_VARIATIONAL_HARD_RESIDUAL_THRESH", hard_residual_thresh);
+    int hard_niter_outer = 3;
+    envInt("DEGRAF_VARIATIONAL_HARD_NITER_OUTER", hard_niter_outer);
+    float hard_gamma = 0.80f;
+    envFloat("DEGRAF_VARIATIONAL_HARD_GAMMA", hard_gamma);
+    float hard_sigma = 1.9f;
+    envFloat("DEGRAF_VARIATIONAL_HARD_SIGMA", hard_sigma);
 
     batch_flows.clear();
     if (batch_i1.size() != batch_i2.size() || batch_i1.size() != batch_matches.size())
@@ -1228,26 +1271,51 @@ bool InterpoNetEngineTRT::densifyBatch(
 
         bool should_run_variational = enable_variational && !dense_flow.empty();
         double sparse_residual_px = -1.0;
-        if (should_run_variational && residual_gate)
+        if (should_run_variational && (residual_gate || hard_mode))
         {
             sparse_residual_px = computeSparseResidualPx(dense_flow, batch_matches[i]);
+        }
+        if (should_run_variational && residual_gate)
+        {
             if (sparse_residual_px >= 0.0 && sparse_residual_px < residual_thresh)
                 should_run_variational = false;
+        }
+
+        bool use_hard_variational = false;
+        if (should_run_variational && hard_mode)
+        {
+            const bool hard_by_points =
+                static_cast<int>(batch_matches[i].src_points.size()) < hard_min_sparse_points;
+            const bool hard_by_residual =
+                (sparse_residual_px >= 0.0 && sparse_residual_px > hard_residual_thresh);
+            use_hard_variational = hard_by_points || hard_by_residual;
         }
 
         if (should_run_variational)
         {
             auto vari_start = std::chrono::high_resolution_clock::now();
-            runVariationalRefine(batch_i1[i], batch_i2[i], dense_flow, i);
+            VariationalOverride override_params;
+            if (use_hard_variational)
+            {
+                override_params.enabled = true;
+                override_params.niter_outer = hard_niter_outer;
+                override_params.gamma = hard_gamma;
+                override_params.sigma = hard_sigma;
+            }
+            runVariationalRefine(batch_i1[i], batch_i2[i], dense_flow, i, &override_params);
             auto vari_end = std::chrono::high_resolution_clock::now();
             total_variational_ms += std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(vari_end - vari_start).count();
             ++variational_applied;
         }
 
-        if (profile_stages && residual_gate)
+        if (profile_stages && (residual_gate || hard_mode))
         {
             std::cout << "[PROFILE][InterpoNetEngineTRT][Frame " << i << "] residual_px=" << sparse_residual_px
-                      << " thresh=" << residual_thresh
+                      << " gate_thresh=" << residual_thresh
+                      << " hard_mode=" << (hard_mode ? "on" : "off")
+                      << " hard=" << (use_hard_variational ? "on" : "off")
+                      << " hard_point_thresh=" << hard_min_sparse_points
+                      << " hard_residual_thresh=" << hard_residual_thresh
                       << " variational=" << (should_run_variational ? "on" : "skip")
                       << std::endl;
         }
