@@ -845,6 +845,7 @@ bool RaftEngineTRT::estimateMatchesBatch(
     const bool allow_lk_fallback = envEnabled("DEGRAF_ALLOW_LK_FALLBACK", false);
     const std::string sample_mode = toLower(envOrDefault("DEGRAF_RAFT_SAMPLE_MODE", "legacy"));
     const bool pad_aware_sampling = (sample_mode == "pad_aware");
+    const bool require_dst_in_bounds = envEnabled("DEGRAF_RAFT_REQUIRE_DST_IN_BOUNDS", false);
 
     if (backend == "lk" || backend == "lk_fallback")
         return runLkFallback(batch_i1, batch_i2, batch_points, batch_matches);
@@ -866,6 +867,9 @@ bool RaftEngineTRT::estimateMatchesBatch(
               << std::endl;
     std::cout << "[PROFILE][RaftEngineTRT] sample_mode="
               << (pad_aware_sampling ? "pad_aware" : "legacy")
+              << std::endl;
+    std::cout << "[PROFILE][RaftEngineTRT] require_dst_in_bounds="
+              << (require_dst_in_bounds ? "1" : "0")
               << std::endl;
 
     if (engine_path.empty() || !cv::utils::fs::exists(engine_path))
@@ -969,7 +973,8 @@ bool RaftEngineTRT::estimateMatchesBatch(
             if (max_flow_length > 0 &&
                 std::sqrt(dx * dx + dy * dy) >= static_cast<float>(max_flow_length))
                 continue;
-            if (d.x < 0 || d.y < 0 || d.x >= batch_i2[i].cols || d.y >= batch_i2[i].rows)
+            if (require_dst_in_bounds &&
+                (d.x < 0 || d.y < 0 || d.x >= batch_i2[i].cols || d.y >= batch_i2[i].rows))
                 continue;
             matches.src_points.push_back(p);
             matches.dst_points.push_back(d);
