@@ -760,6 +760,28 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
     // =====================================================
     // Step 3: InterpoNet in-process dense interpolation
     // =====================================================
+    // IMPORTANT:
+    // InterpoNetEngineTRT resolves edges files by:
+    //   frame_id = DEGRAF_INTERPONET_EDGES_START_INDEX + local_batch_i
+    // where local_batch_i is 0..(batch_size-1).
+    // In batched evaluation, if START_INDEX is left at a constant value (e.g. 0),
+    // later batches would repeatedly read 000000..00000N edges and silently hurt quality.
+    // Here we align START_INDEX to the current batch's first global frame id.
+    int batch_start_index = 0;
+    if (!batch_num_strs.empty())
+    {
+        try
+        {
+            batch_start_index = std::stoi(batch_num_strs.front());
+            setenv("DEGRAF_INTERPONET_EDGES_START_INDEX", std::to_string(batch_start_index).c_str(), 1);
+            setenv("DEGRAF_INTERPONET_DEBUG_START_INDEX", std::to_string(batch_start_index).c_str(), 1);
+        }
+        catch (...)
+        {
+            // Keep existing env values if frame id parsing fails.
+        }
+    }
+
     InterpoNetEngineTRT interponet_engine(127, 0.05f, true, 500.0f, 1.5f);
     if (!interponet_engine.densifyBatch(batch_i1, batch_i2, batch_matches, batch_flows))
     {
