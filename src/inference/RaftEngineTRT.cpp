@@ -169,17 +169,22 @@ float halfToFloat(uint16_t h)
 float bilinearSample(const std::vector<float> &chw,
                      int channel,
                      int h, int w,
-                     float y, float x)
+                     float y, float x,
+                     bool zero_padding)
 {
-    const int x0 = std::max(0, std::min(w - 1, static_cast<int>(std::floor(x))));
-    const int x1 = std::max(0, std::min(w - 1, x0 + 1));
-    const int y0 = std::max(0, std::min(h - 1, static_cast<int>(std::floor(y))));
-    const int y1 = std::max(0, std::min(h - 1, y0 + 1));
+    const int x0 = static_cast<int>(std::floor(x));
+    const int x1 = x0 + 1;
+    const int y0 = static_cast<int>(std::floor(y));
+    const int y1 = y0 + 1;
 
     const float wx = x - static_cast<float>(x0);
     const float wy = y - static_cast<float>(y0);
 
     const auto at = [&](int yy, int xx) -> float {
+        if (yy < 0 || yy >= h || xx < 0 || xx >= w)
+            return zero_padding ? 0.0f : chw[static_cast<size_t>(channel) * h * w +
+                                               static_cast<size_t>(std::max(0, std::min(h - 1, yy))) * w +
+                                               std::max(0, std::min(w - 1, xx))];
         const size_t idx = static_cast<size_t>(channel) * h * w + static_cast<size_t>(yy) * w + xx;
         return chw[idx];
     };
@@ -847,6 +852,8 @@ bool RaftEngineTRT::estimateMatchesBatch(
     const bool pad_aware_sampling = (sample_mode == "pad_aware");
     const bool require_dst_in_bounds = envEnabled("DEGRAF_RAFT_REQUIRE_DST_IN_BOUNDS", false);
     const bool require_sample_in_bounds = envEnabled("DEGRAF_RAFT_REQUIRE_SAMPLE_IN_BOUNDS", false);
+    const std::string sample_padding = toLower(envOrDefault("DEGRAF_RAFT_SAMPLE_PADDING", "zeros"));
+    const bool sample_zero_padding = (sample_padding != "replicate");
 
     if (backend == "lk" || backend == "lk_fallback")
         return runLkFallback(batch_i1, batch_i2, batch_points, batch_matches);
@@ -874,6 +881,9 @@ bool RaftEngineTRT::estimateMatchesBatch(
               << std::endl;
     std::cout << "[PROFILE][RaftEngineTRT] require_sample_in_bounds="
               << (require_sample_in_bounds ? "1" : "0")
+              << std::endl;
+    std::cout << "[PROFILE][RaftEngineTRT] sample_padding="
+              << (sample_zero_padding ? "zeros" : "replicate")
               << std::endl;
 
     if (engine_path.empty() || !cv::utils::fs::exists(engine_path))
@@ -967,8 +977,8 @@ bool RaftEngineTRT::estimateMatchesBatch(
                 (fx < 0 || fy < 0 || fx >= dense_flow.cols || fy >= dense_flow.rows))
                 continue;
 
-            const float du = bilinearSample(flow_chw, 0, dense_flow.rows, dense_flow.cols, fy, fx);
-            const float dv = bilinearSample(flow_chw, 1, dense_flow.rows, dense_flow.cols, fy, fx);
+            const float du = bilinearSample(flow_chw, 0, dense_flow.rows, dense_flow.cols, fy, fx, sample_zero_padding);
+            const float dv = bilinearSample(flow_chw, 1, dense_flow.rows, dense_flow.cols, fy, fx, sample_zero_padding);
 
             // Legacy mode follows existing scale-based mapping.
             // pad_aware mode samples at InputPadder(kitti) coordinates directly.
