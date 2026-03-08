@@ -8,6 +8,8 @@
 #include "FeatureMatcher.h"
 #include <chrono>         
 #include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include "inference/RaftEngineTRT.h"
 #include "inference/InterpoNetEngineTRT.h"
@@ -31,6 +33,63 @@ inline bool envInt(const char *name, int &out_value)
     {
         return false;
     }
+}
+
+inline std::string envOrDefault(const char *name, const std::string &fallback)
+{
+    const char *value = std::getenv(name);
+    if (value && std::string(value).size() > 0)
+        return std::string(value);
+    return fallback;
+}
+
+inline bool loadPointsFile(const std::string &path, std::vector<cv::Point2f> &points)
+{
+    std::ifstream ifs(path.c_str());
+    if (!ifs.is_open())
+        return false;
+    points.clear();
+    std::string line;
+    while (std::getline(ifs, line))
+    {
+        if (line.empty())
+            continue;
+        std::istringstream iss(line);
+        float x = 0.0f, y = 0.0f;
+        if (!(iss >> x >> y))
+            continue;
+        points.emplace_back(x, y);
+    }
+    return !points.empty();
+}
+
+inline bool loadMatchesFile(const std::string &path, SparseFlowMatches &matches)
+{
+    std::ifstream ifs(path.c_str());
+    if (!ifs.is_open())
+        return false;
+    matches.src_points.clear();
+    matches.dst_points.clear();
+    std::string line;
+    while (std::getline(ifs, line))
+    {
+        if (line.empty())
+            continue;
+        std::istringstream iss(line);
+        float x1 = 0.0f, y1 = 0.0f, x2 = 0.0f, y2 = 0.0f;
+        if (!(iss >> x1 >> y1 >> x2 >> y2))
+            continue;
+        matches.src_points.emplace_back(x1, y1);
+        matches.dst_points.emplace_back(x2, y2);
+    }
+    return !matches.src_points.empty() && matches.src_points.size() == matches.dst_points.size();
+}
+
+inline std::string buildIndexedPath(const std::string &dir, const std::string &num_str, const std::string &suffix)
+{
+    if (dir.empty())
+        return "";
+    return cv::format("%s/%s%s", dir.c_str(), num_str.c_str(), suffix.c_str());
 }
 
 inline cv::Ptr<cv::Feature2D> createSiftDetector(int nfeatures, int nOctaveLayers,
@@ -552,6 +611,8 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
     degraf_window_h = std::max(1, degraf_window_h);
     degraf_step_x = std::max(1, degraf_step_x);
     degraf_step_y = std::max(1, degraf_step_y);
+    const std::string points_input_dir = envOrDefault("DEGRAF_POINTS_INPUT_DIR", "");
+    const std::string matches_input_dir = envOrDefault("DEGRAF_MATCHES_INPUT_DIR", "");
 #if USE_CUDA
     const char* degraf_backend = "cuda_degraf";
 #else
@@ -564,6 +625,10 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
               << " window=" << degraf_window_w << "x" << degraf_window_h
               << " step=" << degraf_step_x << "x" << degraf_step_y
               << std::endl;
+    if (!points_input_dir.empty())
+        std::cout << "[PROFILE][FeatureMatcher::degraf_flow_InterpoNet] points_input_dir=" << points_input_dir << std::endl;
+    if (!matches_input_dir.empty())
+        std::cout << "[PROFILE][FeatureMatcher::degraf_flow_InterpoNet] matches_input_dir=" << matches_input_dir << std::endl;
     auto t0 = std::chrono::high_resolution_clock::now();
 
     std::vector<cv::Mat> batch_flows;
@@ -581,6 +646,18 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
     for (size_t idx = 0; idx < batch_i1.size(); ++idx) {
         const cv::Mat& prev = batch_i1[idx];
         std::vector<cv::Point2f> points;
+        if (!points_input_dir.empty())
+        {
+            const std::string p1 = buildIndexedPath(points_input_dir, batch_num_strs[idx], "_points.txt");
+            const std::string p2 = buildIndexedPath(points_input_dir, batch_num_strs[idx], ".txt");
+            if (loadPointsFile(p1, points) || loadPointsFile(p2, points))
+            {
+                batch_points.push_back(points);
+                continue;
+            }
+            std::cerr << "[WARN][FeatureMatcher::degraf_flow_InterpoNet] points file missing/invalid for "
+                      << batch_num_strs[idx] << ", fallback to online DeGraF detect." << std::endl;
+        }
         cv::Size s = prev.size();
 
         IplImage *fromIpl = cvCreateImageHeader(cvSize(prev.cols, prev.rows), IPL_DEPTH_8U, prev.channels());
@@ -633,11 +710,36 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
     // =====================================================
     // Step 2: RAFT in-process sparse matching
     // =====================================================
-    RaftEngineTRT raft_engine;
     std::vector<SparseFlowMatches> batch_matches;
-    if (!raft_engine.estimateMatchesBatch(batch_i1, batch_i2, batch_points, batch_matches))
+    bool loaded_all_matches = false;
+    if (!matches_input_dir.empty())
     {
-        return batch_flows;
+        loaded_all_matches = true;
+        batch_matches.reserve(batch_i1.size());
+        for (size_t idx = 0; idx < batch_i1.size(); ++idx)
+        {
+            SparseFlowMatches m;
+            const std::string p1 = buildIndexedPath(matches_input_dir, batch_num_strs[idx], "_matches.txt");
+            const std::string p2 = buildIndexedPath(matches_input_dir, batch_num_strs[idx], ".txt");
+            if (!(loadMatchesFile(p1, m) || loadMatchesFile(p2, m)))
+            {
+                std::cerr << "[WARN][FeatureMatcher::degraf_flow_InterpoNet] matches file missing/invalid for "
+                          << batch_num_strs[idx] << ", fallback to RAFT TRT." << std::endl;
+                loaded_all_matches = false;
+                batch_matches.clear();
+                break;
+            }
+            batch_matches.push_back(m);
+        }
+    }
+
+    if (!loaded_all_matches)
+    {
+        RaftEngineTRT raft_engine;
+        if (!raft_engine.estimateMatchesBatch(batch_i1, batch_i2, batch_points, batch_matches))
+        {
+            return batch_flows;
+        }
     }
     auto t2 = std::chrono::high_resolution_clock::now();
 
