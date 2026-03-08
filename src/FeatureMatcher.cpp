@@ -7,6 +7,8 @@
 #include "stdafx.h"
 #include "FeatureMatcher.h"
 #include <chrono>         
+#include <cstdlib>
+#include <string>
 #include "inference/RaftEngineTRT.h"
 #include "inference/InterpoNetEngineTRT.h"
 #if USE_CUDA
@@ -15,6 +17,22 @@
 #endif
 
 namespace {
+inline bool envInt(const char *name, int &out_value)
+{
+    const char *value = std::getenv(name);
+    if (!value || std::string(value).empty())
+        return false;
+    try
+    {
+        out_value = std::stoi(value);
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
 inline cv::Ptr<cv::Feature2D> createSiftDetector(int nfeatures, int nOctaveLayers,
                                                   double contrastThreshold, double edgeThreshold,
                                                   double sigma)
@@ -519,6 +537,21 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
     std::vector<std::vector<cv::Point2f>>* out_dst_points_filtered)
 {
     const bool profile_stages = true;
+    int saliency_kernel = 3;
+    envInt("DEGRAF_SALIENCY_KERNEL", saliency_kernel);
+    int degraf_window_w = 3;
+    int degraf_window_h = 3;
+    int degraf_step_x = 9;
+    int degraf_step_y = 9;
+    envInt("DEGRAF_WINDOW_W", degraf_window_w);
+    envInt("DEGRAF_WINDOW_H", degraf_window_h);
+    envInt("DEGRAF_STEP_X", degraf_step_x);
+    envInt("DEGRAF_STEP_Y", degraf_step_y);
+    saliency_kernel = std::max(1, saliency_kernel);
+    degraf_window_w = std::max(1, degraf_window_w);
+    degraf_window_h = std::max(1, degraf_window_h);
+    degraf_step_x = std::max(1, degraf_step_x);
+    degraf_step_y = std::max(1, degraf_step_y);
 #if USE_CUDA
     const char* degraf_backend = "cuda_degraf";
 #else
@@ -526,6 +559,11 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
 #endif
     std::cout << "[PROFILE][FeatureMatcher::degraf_flow_InterpoNet] degraf_backend="
               << degraf_backend << std::endl;
+    std::cout << "[PROFILE][FeatureMatcher::degraf_flow_InterpoNet] saliency_kernel="
+              << saliency_kernel
+              << " window=" << degraf_window_w << "x" << degraf_window_h
+              << " step=" << degraf_step_x << "x" << degraf_step_y
+              << std::endl;
     auto t0 = std::chrono::high_resolution_clock::now();
 
     std::vector<cv::Mat> batch_flows;
@@ -552,17 +590,19 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
         cvSetData(dogIpl, dogMat.data, dogMat.step);
 
         SaliencyDetector saliency_detector;
-        saliency_detector.DoGoS_Saliency(fromIpl, dogIpl, 3, true, true);
+        saliency_detector.DoGoS_Saliency(fromIpl, dogIpl, saliency_kernel, true, true);
         saliency_detector.Release();
 
 		cv::Mat saliency_mat = cv::cvarrToMat(dogIpl);
 #if USE_CUDA
         CudaGradientDetector *gpu_gradient_detector = new CudaGradientDetector();
-		gpu_gradient_detector->CudaDetectGradients(saliency_mat, 3, 3, 9, 9);
+		gpu_gradient_detector->CudaDetectGradients(
+            saliency_mat, degraf_window_w, degraf_window_h, degraf_step_x, degraf_step_y);
 		cv::KeyPoint::convert(gpu_gradient_detector->GetKeypoints(), points);
 #else
         GradientDetector *cpu_gradient_detector = new GradientDetector();
-        cpu_gradient_detector->DetectGradients(dogIpl, 3, 3, 9, 9);
+        cpu_gradient_detector->DetectGradients(
+            dogIpl, degraf_window_w, degraf_window_h, degraf_step_x, degraf_step_y);
         cv::KeyPoint::convert(cpu_gradient_detector->keypoints, points);
 #endif
 
