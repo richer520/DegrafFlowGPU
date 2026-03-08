@@ -840,6 +840,8 @@ bool RaftEngineTRT::estimateMatchesBatch(
 {
     const std::string backend = envOrDefault("DEGRAF_RAFT_BACKEND", "trt");
     const bool allow_lk_fallback = envEnabled("DEGRAF_ALLOW_LK_FALLBACK", false);
+    const std::string sample_mode = toLower(envOrDefault("DEGRAF_RAFT_SAMPLE_MODE", "legacy"));
+    const bool pad_aware_sampling = (sample_mode == "pad_aware");
 
     if (backend == "lk" || backend == "lk_fallback")
         return runLkFallback(batch_i1, batch_i2, batch_points, batch_matches);
@@ -858,6 +860,9 @@ bool RaftEngineTRT::estimateMatchesBatch(
     envInt("DEGRAF_RAFT_MAX_FLOW_LENGTH", max_flow_length);
     std::cout << "[PROFILE][RaftEngineTRT] max_flow_length="
               << (max_flow_length > 0 ? std::to_string(max_flow_length) : std::string("off"))
+              << std::endl;
+    std::cout << "[PROFILE][RaftEngineTRT] sample_mode="
+              << (pad_aware_sampling ? "pad_aware" : "legacy")
               << std::endl;
 
     if (engine_path.empty() || !cv::utils::fs::exists(engine_path))
@@ -931,19 +936,31 @@ bool RaftEngineTRT::estimateMatchesBatch(
         const float sy = static_cast<float>(dense_flow.rows) / static_cast<float>(batch_i1[i].rows);
         const float inv_sx = (sx > 1e-6f) ? (1.0f / sx) : 1.0f;
         const float inv_sy = (sy > 1e-6f) ? (1.0f / sy) : 1.0f;
+        const int src_w = batch_i1[i].cols;
+        const int src_h = batch_i1[i].rows;
+        const int pad_w = std::max(0, dense_flow.cols - src_w);
+        const int pad_left = pad_w / 2;
+        const int pad_top = 0; // InputPadder(mode='kitti') behavior.
         for (const auto &p : src)
         {
-            const float fx = p.x * sx;
-            const float fy = p.y * sy;
+            float fx = p.x * sx;
+            float fy = p.y * sy;
+            if (pad_aware_sampling)
+            {
+                fx = p.x + static_cast<float>(pad_left);
+                fy = p.y + static_cast<float>(pad_top);
+            }
             if (fx < 0 || fy < 0 || fx >= dense_flow.cols || fy >= dense_flow.rows)
                 continue;
 
             const float du = bilinearSample(flow_chw, 0, dense_flow.rows, dense_flow.cols, fy, fx);
             const float dv = bilinearSample(flow_chw, 1, dense_flow.rows, dense_flow.cols, fy, fx);
 
-            // Keep behavior aligned with legacy Python matcher:
-            // sampled flow is in dense-flow grid coordinates, convert back to original image scale.
-            const cv::Point2f d(p.x + du * inv_sx, p.y + dv * inv_sy);
+            // Legacy mode follows existing scale-based mapping.
+            // pad_aware mode samples at InputPadder(kitti) coordinates directly.
+            const cv::Point2f d(
+                p.x + (pad_aware_sampling ? du : (du * inv_sx)),
+                p.y + (pad_aware_sampling ? dv : (dv * inv_sy)));
             const float dx = p.x - d.x;
             const float dy = p.y - d.y;
             if (max_flow_length > 0 &&
