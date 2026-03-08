@@ -41,6 +41,22 @@ bool envEnabled(const char *name, bool default_value)
     return !(v == "0" || v == "false" || v == "off" || v == "no");
 }
 
+bool envInt(const char *name, int &out_value)
+{
+    const char *value = std::getenv(name);
+    if (!value || std::string(value).empty())
+        return false;
+    try
+    {
+        out_value = std::stoi(value);
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
 cv::Mat adaptImageToStaticDims(const cv::Mat &src, int dst_h, int dst_w)
 {
     if (src.empty() || dst_h <= 0 || dst_w <= 0)
@@ -192,6 +208,8 @@ bool runLkFallback(
 
     batch_matches.reserve(batch_i1.size());
     double total_lk_ms = 0.0;
+    int max_flow_length = 100;
+    envInt("DEGRAF_LK_MAX_FLOW_LENGTH", max_flow_length);
 
     for (size_t i = 0; i < batch_i1.size(); ++i)
     {
@@ -232,7 +250,6 @@ bool runLkFallback(
         matches.src_points.reserve(src.size());
         matches.dst_points.reserve(src.size());
 
-        const int max_flow_length = 100;
         for (size_t p = 0; p < src.size(); ++p)
         {
             if (p >= dst.size() || p >= status.size() || !status[p])
@@ -242,7 +259,8 @@ bool runLkFallback(
             const cv::Point2f &d = dst[p];
             const float dx = s.x - d.x;
             const float dy = s.y - d.y;
-            if (std::sqrt(dx * dx + dy * dy) >= max_flow_length)
+            if (max_flow_length > 0 &&
+                std::sqrt(dx * dx + dy * dy) >= static_cast<float>(max_flow_length))
                 continue;
 
             if (d.x < 0 || d.y < 0 || d.x >= gray2.cols || d.y >= gray2.rows)
@@ -836,6 +854,11 @@ bool RaftEngineTRT::estimateMatchesBatch(
     const std::string engine_path = envOrDefault("DEGRAF_RAFT_ENGINE_PATH", "");
     std::cout << "[PROFILE][RaftEngineTRT] backend=trt"
               << " frames=" << batch_i1.size() << std::endl;
+    int max_flow_length = 0;
+    envInt("DEGRAF_RAFT_MAX_FLOW_LENGTH", max_flow_length);
+    std::cout << "[PROFILE][RaftEngineTRT] max_flow_length="
+              << (max_flow_length > 0 ? std::to_string(max_flow_length) : std::string("off"))
+              << std::endl;
 
     if (engine_path.empty() || !cv::utils::fs::exists(engine_path))
     {
@@ -908,7 +931,6 @@ bool RaftEngineTRT::estimateMatchesBatch(
         const float sy = static_cast<float>(dense_flow.rows) / static_cast<float>(batch_i1[i].rows);
         const float inv_sx = (sx > 1e-6f) ? (1.0f / sx) : 1.0f;
         const float inv_sy = (sy > 1e-6f) ? (1.0f / sy) : 1.0f;
-        const int max_flow_length = 100;
         for (const auto &p : src)
         {
             const float fx = p.x * sx;
@@ -924,7 +946,8 @@ bool RaftEngineTRT::estimateMatchesBatch(
             const cv::Point2f d(p.x + du * inv_sx, p.y + dv * inv_sy);
             const float dx = p.x - d.x;
             const float dy = p.y - d.y;
-            if (std::sqrt(dx * dx + dy * dy) >= max_flow_length)
+            if (max_flow_length > 0 &&
+                std::sqrt(dx * dx + dy * dy) >= static_cast<float>(max_flow_length))
                 continue;
             if (d.x < 0 || d.y < 0 || d.x >= batch_i2[i].cols || d.y >= batch_i2[i].rows)
                 continue;
