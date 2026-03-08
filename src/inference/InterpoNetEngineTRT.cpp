@@ -1115,6 +1115,7 @@ bool InterpoNetEngineTRT::densifyBatch(
     const std::string debug_dump_dir = envOrDefault("DEGRAF_INTERPONET_DEBUG_DUMP_DIR", "");
     int debug_start_index = 0;
     envInt("DEGRAF_INTERPONET_DEBUG_START_INDEX", debug_start_index);
+    const bool debug_dump_lowres = envEnabled("DEGRAF_INTERPONET_DEBUG_DUMP_LOWRES", false);
     if (!debug_dump_dir.empty() && !cv::utils::fs::exists(debug_dump_dir))
         cv::utils::fs::createDirectories(debug_dump_dir);
 
@@ -1188,6 +1189,7 @@ bool InterpoNetEngineTRT::densifyBatch(
         auto interp_start = std::chrono::high_resolution_clock::now();
         bool interpolate_ok = false;
         bool used_trt = false;
+        cv::Mat trt_low_flow_for_dump;
         std::string edges_source = "canny";
         cv::Mat sed_edges;
         std::string sed_try_p1;
@@ -1233,6 +1235,8 @@ bool InterpoNetEngineTRT::densifyBatch(
                 cv::resize(low_flow, dense_flow, batch_i1[i].size(), 0, 0, cv::INTER_CUBIC);
                 interpolate_ok = !dense_flow.empty();
                 used_trt = interpolate_ok;
+                if (interpolate_ok)
+                    trt_low_flow_for_dump = low_flow;
             }
 #endif
             if (!interpolate_ok && allow_epic_fallback)
@@ -1273,6 +1277,16 @@ bool InterpoNetEngineTRT::densifyBatch(
             {
                 std::cout << "[PROFILE][InterpoNetEngineTRT][Frame " << i
                           << "] dumped_dense_flow=" << dump_path << std::endl;
+            }
+            if (debug_dump_lowres && used_trt && !trt_low_flow_for_dump.empty())
+            {
+                const std::string low_path =
+                    cv::utils::fs::join(debug_dump_dir, cv::format("%06d_trt_low.flo", frame_id));
+                if (writeFlowFile(low_path, trt_low_flow_for_dump))
+                {
+                    std::cout << "[PROFILE][InterpoNetEngineTRT][Frame " << i
+                              << "] dumped_lowres_flow=" << low_path << std::endl;
+                }
             }
         }
         auto interp_end = std::chrono::high_resolution_clock::now();
