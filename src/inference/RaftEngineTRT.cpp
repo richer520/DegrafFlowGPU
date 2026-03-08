@@ -41,6 +41,27 @@ bool envEnabled(const char *name, bool default_value)
     return !(v == "0" || v == "false" || v == "off" || v == "no");
 }
 
+cv::Mat adaptImageToStaticDims(const cv::Mat &src, int dst_h, int dst_w)
+{
+    if (src.empty() || dst_h <= 0 || dst_w <= 0)
+        return cv::Mat();
+    if (src.rows == dst_h && src.cols == dst_w)
+        return src;
+
+    const int copy_h = std::min(src.rows, dst_h);
+    const int copy_w = std::min(src.cols, dst_w);
+    cv::Mat cropped = src(cv::Rect(0, 0, copy_w, copy_h));
+    if (copy_h == dst_h && copy_w == dst_w)
+        return cropped.clone();
+
+    cv::Mat out;
+    cv::copyMakeBorder(cropped, out,
+                       0, dst_h - copy_h,
+                       0, dst_w - copy_w,
+                       cv::BORDER_REPLICATE);
+    return out;
+}
+
 std::string toLower(std::string s)
 {
     for (char &c : s)
@@ -327,8 +348,30 @@ public:
 
         const int h = img1_pad.rows;
         const int w = img1_pad.cols;
+        int runtime_h = h;
+        int runtime_w = w;
 
-        nvinfer1::Dims4 input_dims(1, 3, h, w);
+        // If the engine has static input dims (e.g. 1x3x376x1248), adapt padded input
+        // by right/bottom pad or crop to avoid TRT setInputShape mismatch on variable-size frames.
+        const nvinfer1::Dims model_in_dims = engine_->getTensorShape(input0_name_.c_str());
+        if (model_in_dims.nbDims == 4 && model_in_dims.d[2] > 0 && model_in_dims.d[3] > 0)
+        {
+            const int model_h = model_in_dims.d[2];
+            const int model_w = model_in_dims.d[3];
+            if (model_h != runtime_h || model_w != runtime_w)
+            {
+                cv::Mat img1_adapt = adaptImageToStaticDims(img1_pad, model_h, model_w);
+                cv::Mat img2_adapt = adaptImageToStaticDims(img2_pad, model_h, model_w);
+                if (img1_adapt.empty() || img2_adapt.empty())
+                    return false;
+                img1_pad = img1_adapt;
+                img2_pad = img2_adapt;
+                runtime_h = model_h;
+                runtime_w = model_w;
+            }
+        }
+
+        nvinfer1::Dims4 input_dims(1, 3, runtime_h, runtime_w);
 #if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR >= 10)
         if (!context_->setInputShape(input0_name_.c_str(), input_dims) ||
             !context_->setInputShape(input1_name_.c_str(), input_dims))
@@ -372,7 +415,7 @@ public:
         if (out_h <= 0 || out_w <= 0)
             return false;
 
-        const size_t in_elems = static_cast<size_t>(3) * h * w;
+        const size_t in_elems = static_cast<size_t>(3) * runtime_h * runtime_w;
         const size_t out_channels = static_cast<size_t>(out_dims.d[1]);
         const size_t out_elems = out_channels * out_h * out_w;
         const nvinfer1::DataType primary_dtype = engine_->getTensorDataType(primary_output_name_.c_str());
@@ -434,6 +477,7 @@ public:
                   << " dtype=" << static_cast<int>(primary_dtype)
                   << " output_hw=" << out_h << "x" << out_w
                   << " input_hw=" << src_h << "x" << src_w
+                  << " runtime_hw=" << runtime_h << "x" << runtime_w
                   << " pad(lrtb)=" << pad_left << "," << pad_right << "," << pad_top << "," << pad_bottom
                   << std::endl;
 
@@ -484,7 +528,18 @@ public:
                 row[xx][1] = out[static_cast<size_t>(out_h) * out_w + base];
             }
         }
-        if (src_h > out_h || src_w > out_w)
+
+        // Keep RAFT dense flow on the original padded grid (before static-dim adaptation)
+        // so downstream sparse sampling scale remains consistent with prior behavior.
+        if (flow_hw2.rows != h || flow_hw2.cols != w)
+        {
+            const int copy_h = std::min(flow_hw2.rows, h);
+            const int copy_w = std::min(flow_hw2.cols, w);
+            cv::Mat flow_target(h, w, CV_32FC2, cv::Scalar(0, 0));
+            flow_hw2(cv::Rect(0, 0, copy_w, copy_h)).copyTo(flow_target(cv::Rect(0, 0, copy_w, copy_h)));
+            flow_hw2 = flow_target;
+        }
+        if (src_h > flow_hw2.rows || src_w > flow_hw2.cols)
             return false;
         // Keep padded flow resolution for sparse sampling to match legacy Python RAFT matcher behavior.
         return true;
