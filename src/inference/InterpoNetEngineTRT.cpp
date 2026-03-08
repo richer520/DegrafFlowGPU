@@ -1134,6 +1134,11 @@ bool InterpoNetEngineTRT::densifyBatch(
     envFloat("DEGRAF_VARIATIONAL_HARD_GAMMA", hard_gamma);
     float hard_sigma = 1.9f;
     envFloat("DEGRAF_VARIATIONAL_HARD_SIGMA", hard_sigma);
+    if (profile_stages && hard_mode && !residual_gate)
+    {
+        std::cout << "[PROFILE][InterpoNetEngineTRT][Variational] hard_mode=on but residual_gate=off; "
+                  << "all frames may run variational and increase latency." << std::endl;
+    }
 
     batch_flows.clear();
     if (batch_i1.size() != batch_i2.size() || batch_i1.size() != batch_matches.size())
@@ -1143,6 +1148,10 @@ bool InterpoNetEngineTRT::densifyBatch(
     double total_interpolate_ms = 0.0;
     double total_variational_ms = 0.0;
     int variational_applied = 0;
+    int variational_skipped_by_gate = 0;
+    int hard_applied = 0;
+    int hard_trigger_by_points = 0;
+    int hard_trigger_by_residual = 0;
 
 #if DEGRAF_HAVE_TENSORRT
     // Keep TRT runner alive for process lifetime to avoid teardown-order crashes
@@ -1278,7 +1287,10 @@ bool InterpoNetEngineTRT::densifyBatch(
         if (should_run_variational && residual_gate)
         {
             if (sparse_residual_px >= 0.0 && sparse_residual_px < residual_thresh)
+            {
                 should_run_variational = false;
+                ++variational_skipped_by_gate;
+            }
         }
 
         bool use_hard_variational = false;
@@ -1289,6 +1301,14 @@ bool InterpoNetEngineTRT::densifyBatch(
             const bool hard_by_residual =
                 (sparse_residual_px >= 0.0 && sparse_residual_px > hard_residual_thresh);
             use_hard_variational = hard_by_points || hard_by_residual;
+            if (use_hard_variational)
+            {
+                ++hard_applied;
+                if (hard_by_points)
+                    ++hard_trigger_by_points;
+                if (hard_by_residual)
+                    ++hard_trigger_by_residual;
+            }
         }
 
         if (should_run_variational)
@@ -1329,6 +1349,10 @@ bool InterpoNetEngineTRT::densifyBatch(
                   << " interpolate_ms=" << total_interpolate_ms
                   << " variational_ms=" << total_variational_ms
                   << " variational_frames=" << variational_applied
+                  << " gate_skipped_frames=" << variational_skipped_by_gate
+                  << " hard_frames=" << hard_applied
+                  << " hard_by_points=" << hard_trigger_by_points
+                  << " hard_by_residual=" << hard_trigger_by_residual
                   << " total_ms=" << (total_interpolate_ms + total_variational_ms)
                   << std::endl;
     }
