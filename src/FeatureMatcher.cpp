@@ -43,6 +43,17 @@ inline std::string envOrDefault(const char *name, const std::string &fallback)
     return fallback;
 }
 
+inline bool envEnabled(const char *name, bool default_value)
+{
+    const char *value = std::getenv(name);
+    if (!value)
+        return default_value;
+    std::string v(value);
+    for (char &c : v)
+        c = static_cast<char>(std::tolower(c));
+    return !(v == "0" || v == "false" || v == "off" || v == "no");
+}
+
 inline bool loadPointsFile(const std::string &path, std::vector<cv::Point2f> &points)
 {
     std::ifstream ifs(path.c_str());
@@ -90,6 +101,63 @@ inline std::string buildIndexedPath(const std::string &dir, const std::string &n
     if (dir.empty())
         return "";
     return cv::format("%s/%s%s", dir.c_str(), num_str.c_str(), suffix.c_str());
+}
+
+inline void detectDegrafPointsForInterpoNet(
+    const cv::Mat &img,
+    int saliency_kernel,
+    int degraf_window_w,
+    int degraf_window_h,
+    int degraf_step_x,
+    int degraf_step_y,
+    std::vector<cv::Point2f> &points)
+{
+    points.clear();
+    cv::Size s = img.size();
+
+    IplImage *fromIpl = cvCreateImageHeader(cvSize(img.cols, img.rows), IPL_DEPTH_8U, img.channels());
+    cvSetData(fromIpl, const_cast<uchar *>(img.data), img.step);
+    cv::Mat dogMat = cv::Mat::zeros(s.height, s.width, CV_8UC3);
+    IplImage *dogIpl = cvCreateImageHeader(cvSize(dogMat.cols, dogMat.rows), IPL_DEPTH_8U, dogMat.channels());
+    cvSetData(dogIpl, dogMat.data, dogMat.step);
+
+    SaliencyDetector saliency_detector;
+    saliency_detector.DoGoS_Saliency(fromIpl, dogIpl, saliency_kernel, true, true);
+    saliency_detector.Release();
+
+    cv::Mat saliency_mat = cv::cvarrToMat(dogIpl);
+#if USE_CUDA
+    CudaGradientDetector *gpu_gradient_detector = new CudaGradientDetector();
+    gpu_gradient_detector->CudaDetectGradients(
+        saliency_mat, degraf_window_w, degraf_window_h, degraf_step_x, degraf_step_y);
+    cv::KeyPoint::convert(gpu_gradient_detector->GetKeypoints(), points);
+    delete gpu_gradient_detector;
+#else
+    GradientDetector *cpu_gradient_detector = new GradientDetector();
+    cpu_gradient_detector->DetectGradients(
+        dogIpl, degraf_window_w, degraf_window_h, degraf_step_x, degraf_step_y);
+    cv::KeyPoint::convert(cpu_gradient_detector->keypoints, points);
+    delete cpu_gradient_detector;
+#endif
+
+    const int MAX_POINTS = 50000;
+    if (points.size() > MAX_POINTS)
+    {
+        std::vector<cv::Point2f> subsampled_points;
+        subsampled_points.reserve(MAX_POINTS);
+        int step_sample = static_cast<int>(points.size()) / MAX_POINTS;
+        step_sample = std::max(1, step_sample);
+        for (size_t i = 0; i < points.size(); i += static_cast<size_t>(step_sample))
+        {
+            subsampled_points.push_back(points[i]);
+            if (subsampled_points.size() >= MAX_POINTS)
+                break;
+        }
+        points = std::move(subsampled_points);
+    }
+
+    cvReleaseImageHeader(&fromIpl);
+    cvReleaseImageHeader(&dogIpl);
 }
 
 inline cv::Ptr<cv::Feature2D> createSiftDetector(int nfeatures, int nOctaveLayers,
@@ -613,6 +681,7 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
     degraf_step_y = std::max(1, degraf_step_y);
     const std::string points_input_dir = envOrDefault("DEGRAF_POINTS_INPUT_DIR", "");
     const std::string matches_input_dir = envOrDefault("DEGRAF_MATCHES_INPUT_DIR", "");
+    const bool use_ba_matches = envEnabled("DEGRAF_INTERPONET_USE_BA_MATCHES", false);
 #if USE_CUDA
     const char* degraf_backend = "cuda_degraf";
 #else
@@ -629,6 +698,8 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
         std::cout << "[PROFILE][FeatureMatcher::degraf_flow_InterpoNet] points_input_dir=" << points_input_dir << std::endl;
     if (!matches_input_dir.empty())
         std::cout << "[PROFILE][FeatureMatcher::degraf_flow_InterpoNet] matches_input_dir=" << matches_input_dir << std::endl;
+    std::cout << "[PROFILE][FeatureMatcher::degraf_flow_InterpoNet] use_ba_matches="
+              << (use_ba_matches ? "1" : "0") << std::endl;
     auto t0 = std::chrono::high_resolution_clock::now();
 
     std::vector<cv::Mat> batch_flows;
@@ -658,59 +729,30 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
             std::cerr << "[WARN][FeatureMatcher::degraf_flow_InterpoNet] points file missing/invalid for "
                       << batch_num_strs[idx] << ", fallback to online DeGraF detect." << std::endl;
         }
-        cv::Size s = prev.size();
-
-        IplImage *fromIpl = cvCreateImageHeader(cvSize(prev.cols, prev.rows), IPL_DEPTH_8U, prev.channels());
-        cvSetData(fromIpl, const_cast<uchar*>(prev.data), prev.step);
-        cv::Mat dogMat = cv::Mat::zeros(s.height, s.width, CV_8UC3);
-        IplImage *dogIpl = cvCreateImageHeader(cvSize(dogMat.cols, dogMat.rows), IPL_DEPTH_8U, dogMat.channels());
-        cvSetData(dogIpl, dogMat.data, dogMat.step);
-
-        SaliencyDetector saliency_detector;
-        saliency_detector.DoGoS_Saliency(fromIpl, dogIpl, saliency_kernel, true, true);
-        saliency_detector.Release();
-
-		cv::Mat saliency_mat = cv::cvarrToMat(dogIpl);
-#if USE_CUDA
-        CudaGradientDetector *gpu_gradient_detector = new CudaGradientDetector();
-		gpu_gradient_detector->CudaDetectGradients(
-            saliency_mat, degraf_window_w, degraf_window_h, degraf_step_x, degraf_step_y);
-		cv::KeyPoint::convert(gpu_gradient_detector->GetKeypoints(), points);
-#else
-        GradientDetector *cpu_gradient_detector = new GradientDetector();
-        cpu_gradient_detector->DetectGradients(
-            dogIpl, degraf_window_w, degraf_window_h, degraf_step_x, degraf_step_y);
-        cv::KeyPoint::convert(cpu_gradient_detector->keypoints, points);
-#endif
-
-        const int MAX_POINTS = 50000;
-        if (points.size() > MAX_POINTS) {
-            std::vector<cv::Point2f> subsampled_points;
-            subsampled_points.reserve(MAX_POINTS);
-            int step_sample = points.size() / MAX_POINTS;
-            for (size_t i = 0; i < points.size(); i += step_sample) {
-                subsampled_points.push_back(points[i]);
-                if (subsampled_points.size() >= MAX_POINTS) break;
-            }
-            points = subsampled_points;
-        }
-        
-#if USE_CUDA
-        delete gpu_gradient_detector;
-#else
-        delete cpu_gradient_detector;
-#endif
-        cvReleaseImageHeader(&fromIpl);
-        cvReleaseImageHeader(&dogIpl);
-
+        detectDegrafPointsForInterpoNet(
+            prev, saliency_kernel, degraf_window_w, degraf_window_h, degraf_step_x, degraf_step_y, points);
         batch_points.push_back(points);
     }
     auto t1 = std::chrono::high_resolution_clock::now();
+
+    std::vector<std::vector<cv::Point2f>> batch_points_ba;
+    if (use_ba_matches)
+    {
+        batch_points_ba.reserve(batch_i2.size());
+        for (size_t idx = 0; idx < batch_i2.size(); ++idx)
+        {
+            std::vector<cv::Point2f> points_ba;
+            detectDegrafPointsForInterpoNet(
+                batch_i2[idx], saliency_kernel, degraf_window_w, degraf_window_h, degraf_step_x, degraf_step_y, points_ba);
+            batch_points_ba.push_back(std::move(points_ba));
+        }
+    }
 
     // =====================================================
     // Step 2: RAFT in-process sparse matching
     // =====================================================
     std::vector<SparseFlowMatches> batch_matches;
+    std::vector<SparseFlowMatches> batch_matches_ba;
     bool loaded_all_matches = false;
     if (!matches_input_dir.empty())
     {
@@ -737,6 +779,21 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
     {
         RaftEngineTRT raft_engine;
         if (!raft_engine.estimateMatchesBatch(batch_i1, batch_i2, batch_points, batch_matches))
+        {
+            return batch_flows;
+        }
+        if (use_ba_matches)
+        {
+            if (!raft_engine.estimateMatchesBatch(batch_i2, batch_i1, batch_points_ba, batch_matches_ba))
+            {
+                return batch_flows;
+            }
+        }
+    }
+    else if (use_ba_matches)
+    {
+        RaftEngineTRT raft_engine;
+        if (!raft_engine.estimateMatchesBatch(batch_i2, batch_i1, batch_points_ba, batch_matches_ba))
         {
             return batch_flows;
         }
@@ -783,7 +840,9 @@ std::vector<cv::Mat> FeatureMatcher::degraf_flow_InterpoNet(
     }
 
     InterpoNetEngineTRT interponet_engine(127, 0.05f, true, 500.0f, 1.5f);
-    if (!interponet_engine.densifyBatch(batch_i1, batch_i2, batch_matches, batch_flows))
+    const std::vector<SparseFlowMatches> *batch_matches_ba_ptr =
+        (use_ba_matches && batch_matches_ba.size() == batch_i1.size()) ? &batch_matches_ba : nullptr;
+    if (!interponet_engine.densifyBatch(batch_i1, batch_i2, batch_matches, batch_matches_ba_ptr, batch_flows))
     {
         batch_flows.clear();
     }

@@ -18,6 +18,13 @@ public:
         const std::vector<SparseFlowMatches> &batch_matches,
         std::vector<cv::Mat> &batch_flows) override;
 
+    bool densifyBatch(
+        const std::vector<cv::Mat> &batch_i1,
+        const std::vector<cv::Mat> &batch_i2,
+        const std::vector<SparseFlowMatches> &batch_matches,
+        const std::vector<SparseFlowMatches> *batch_matches_ba,
+        std::vector<cv::Mat> &batch_flows);
+
 private:
     int k_;
     float sigma_;

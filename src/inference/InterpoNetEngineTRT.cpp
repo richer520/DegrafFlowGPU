@@ -606,24 +606,18 @@ private:
 };
 #endif
 
-void buildInterpoNetInputsFromMatches(
-    const cv::Mat &img1,
+void buildInterpoNetSparseMapFromMatches(
     const SparseFlowMatches &matches,
+    int trim_h,
+    int trim_w,
     int downscale,
-    const cv::Mat *precomputed_edges_full,
+    int low_h,
+    int low_w,
     std::vector<float> &image_nhwc,
-    std::vector<float> &mask_nhwc,
-    std::vector<float> &edges_nhwc,
-    int &low_h,
-    int &low_w)
+    std::vector<float> &mask_nhwc)
 {
-    const int trim_h = img1.rows - (img1.rows % downscale);
-    const int trim_w = img1.cols - (img1.cols % downscale);
-    low_h = trim_h / downscale;
-    low_w = trim_w / downscale;
     image_nhwc.assign(static_cast<size_t>(low_h) * low_w * 2, 0.0f);
     mask_nhwc.assign(static_cast<size_t>(low_h) * low_w, -1.0f);
-    edges_nhwc.assign(static_cast<size_t>(low_h) * low_w, 0.0f);
 
     // Reproduce Python InterpoNet input semantics:
     // 1) build sparse flow map at full resolution (unknown = NaN, mask=-1)
@@ -677,6 +671,94 @@ void buildInterpoNetInputsFromMatches(
             mask_nhwc[li] = 1.0f;
         }
     }
+}
+
+void createMeanMapAbBa(
+    const std::vector<float> &image_ab,
+    const std::vector<float> &mask_ab,
+    const std::vector<float> &image_ba,
+    const std::vector<float> &mask_ba,
+    int low_h,
+    int low_w,
+    int downscale,
+    std::vector<float> &image_out,
+    std::vector<float> &mask_out)
+{
+    image_out.assign(static_cast<size_t>(low_h) * low_w * 2, 0.0f);
+    mask_out.assign(static_cast<size_t>(low_h) * low_w, -1.0f);
+
+    std::vector<float> rev_of_map_ba(static_cast<size_t>(low_h) * low_w * 2, 0.0f);
+    std::vector<int> map_count(static_cast<size_t>(low_h) * low_w, 0);
+
+    for (int y = 0; y < low_h; ++y)
+    {
+        for (int x = 0; x < low_w; ++x)
+        {
+            const size_t idx = static_cast<size_t>(y) * low_w + x;
+            if (idx >= mask_ba.size() || mask_ba[idx] <= 0.0f)
+                continue;
+
+            const float u = image_ba[idx * 2 + 0];
+            const float v = image_ba[idx * 2 + 1];
+            const int rev_x = static_cast<int>(std::floor(((static_cast<float>(x) * downscale + u) /
+                                                            static_cast<float>(downscale)) + 0.5f));
+            const int rev_y = static_cast<int>(std::floor(((static_cast<float>(y) * downscale + v) /
+                                                            static_cast<float>(downscale)) + 0.5f));
+            // Match original Python implementation, which excludes border coordinates.
+            if (!(0 < rev_x && rev_x < low_w && 0 < rev_y && rev_y < low_h))
+                continue;
+
+            const size_t rev_idx = static_cast<size_t>(rev_y) * low_w + rev_x;
+            map_count[rev_idx] += 1;
+            const float count = static_cast<float>(map_count[rev_idx]);
+            rev_of_map_ba[rev_idx * 2 + 0] += (-rev_of_map_ba[rev_idx * 2 + 0] - u) / count;
+            rev_of_map_ba[rev_idx * 2 + 1] += (-rev_of_map_ba[rev_idx * 2 + 1] - v) / count;
+        }
+    }
+
+    for (int y = 0; y < low_h; ++y)
+    {
+        for (int x = 0; x < low_w; ++x)
+        {
+            const size_t idx = static_cast<size_t>(y) * low_w + x;
+            const bool has_ab = idx < mask_ab.size() && mask_ab[idx] > 0.0f;
+            const bool has_rev = map_count[idx] > 0;
+            if (!has_ab && !has_rev)
+                continue;
+
+            mask_out[idx] = 1.0f;
+            if (has_ab && has_rev)
+            {
+                image_out[idx * 2 + 0] = 0.5f * (image_ab[idx * 2 + 0] + rev_of_map_ba[idx * 2 + 0]);
+                image_out[idx * 2 + 1] = 0.5f * (image_ab[idx * 2 + 1] + rev_of_map_ba[idx * 2 + 1]);
+            }
+            else if (has_ab)
+            {
+                image_out[idx * 2 + 0] = image_ab[idx * 2 + 0];
+                image_out[idx * 2 + 1] = image_ab[idx * 2 + 1];
+            }
+            else
+            {
+                image_out[idx * 2 + 0] = rev_of_map_ba[idx * 2 + 0];
+                image_out[idx * 2 + 1] = rev_of_map_ba[idx * 2 + 1];
+            }
+        }
+    }
+}
+
+void buildInterpoNetEdgesInput(
+    const cv::Mat &img1,
+    int downscale,
+    const cv::Mat *precomputed_edges_full,
+    std::vector<float> &edges_nhwc,
+    int &low_h,
+    int &low_w)
+{
+    const int trim_h = img1.rows - (img1.rows % downscale);
+    const int trim_w = img1.cols - (img1.cols % downscale);
+    low_h = trim_h / downscale;
+    low_w = trim_w / downscale;
+    edges_nhwc.assign(static_cast<size_t>(low_h) * low_w, 0.0f);
 
     cv::Mat edges_f;
     if (precomputed_edges_full && !precomputed_edges_full->empty() &&
@@ -707,6 +789,42 @@ void buildInterpoNetInputsFromMatches(
         for (int x = 0; x < low_w; ++x)
             edges_nhwc[static_cast<size_t>(y) * low_w + x] = row[x];
     }
+}
+
+void buildInterpoNetInputsFromMatches(
+    const cv::Mat &img1,
+    const SparseFlowMatches &matches,
+    const SparseFlowMatches *matches_ba,
+    int downscale,
+    const cv::Mat *precomputed_edges_full,
+    std::vector<float> &image_nhwc,
+    std::vector<float> &mask_nhwc,
+    std::vector<float> &edges_nhwc,
+    int &low_h,
+    int &low_w)
+{
+    const int trim_h = img1.rows - (img1.rows % downscale);
+    const int trim_w = img1.cols - (img1.cols % downscale);
+    low_h = trim_h / downscale;
+    low_w = trim_w / downscale;
+
+    std::vector<float> image_ab, mask_ab;
+    buildInterpoNetSparseMapFromMatches(matches, trim_h, trim_w, downscale, low_h, low_w, image_ab, mask_ab);
+
+    if (matches_ba && !matches_ba->src_points.empty() &&
+        matches_ba->src_points.size() == matches_ba->dst_points.size())
+    {
+        std::vector<float> image_ba, mask_ba;
+        buildInterpoNetSparseMapFromMatches(*matches_ba, trim_h, trim_w, downscale, low_h, low_w, image_ba, mask_ba);
+        createMeanMapAbBa(image_ab, mask_ab, image_ba, mask_ba, low_h, low_w, downscale, image_nhwc, mask_nhwc);
+    }
+    else
+    {
+        image_nhwc = std::move(image_ab);
+        mask_nhwc = std::move(mask_ab);
+    }
+
+    buildInterpoNetEdgesInput(img1, downscale, precomputed_edges_full, edges_nhwc, low_h, low_w);
 }
 
 bool densifyWithEpic(
@@ -1099,6 +1217,16 @@ bool InterpoNetEngineTRT::densifyBatch(
     const std::vector<SparseFlowMatches> &batch_matches,
     std::vector<cv::Mat> &batch_flows)
 {
+    return densifyBatch(batch_i1, batch_i2, batch_matches, nullptr, batch_flows);
+}
+
+bool InterpoNetEngineTRT::densifyBatch(
+    const std::vector<cv::Mat> &batch_i1,
+    const std::vector<cv::Mat> &batch_i2,
+    const std::vector<SparseFlowMatches> &batch_matches,
+    const std::vector<SparseFlowMatches> *batch_matches_ba,
+    std::vector<cv::Mat> &batch_flows)
+{
     const std::string backend = envOrDefault("DEGRAF_INTERPONET_BACKEND", "epic");
     const bool allow_epic_fallback = envEnabled("DEGRAF_ALLOW_EPIC_FALLBACK", true);
     const std::string trt_engine_path = envOrDefault(
@@ -1143,6 +1271,8 @@ bool InterpoNetEngineTRT::densifyBatch(
 
     batch_flows.clear();
     if (batch_i1.size() != batch_i2.size() || batch_i1.size() != batch_matches.size())
+        return false;
+    if (batch_matches_ba && batch_matches_ba->size() != batch_i1.size())
         return false;
 
     batch_flows.reserve(batch_i1.size());
@@ -1219,9 +1349,13 @@ bool InterpoNetEngineTRT::densifyBatch(
 #if DEGRAF_HAVE_TENSORRT
             std::vector<float> image_nhwc, mask_nhwc, edges_nhwc;
             int low_h = 0, low_w = 0;
+            const SparseFlowMatches *matches_ba = nullptr;
+            if (batch_matches_ba)
+                matches_ba = &((*batch_matches_ba)[i]);
             buildInterpoNetInputsFromMatches(
                 batch_i1[i],
                 batch_matches[i],
+                matches_ba,
                 interponet_downscale,
                 sed_edges.empty() ? nullptr : &sed_edges,
                 image_nhwc,
@@ -1265,6 +1399,9 @@ bool InterpoNetEngineTRT::densifyBatch(
                       << " downscale=" << interponet_downscale
                       << " edges_source=" << edges_source
                       << " sparse_points=" << batch_matches[i].src_points.size()
+                      << " ba_sparse_points=" << ((batch_matches_ba && i < batch_matches_ba->size())
+                                                     ? (*batch_matches_ba)[i].src_points.size()
+                                                     : 0)
                       << std::endl;
         }
 
