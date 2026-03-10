@@ -78,7 +78,7 @@ def import_interponet_modules(project_root: str):
     if not hasattr(tf.contrib, "layers"):
         tf.contrib.layers = types.SimpleNamespace()  # type: ignore[attr-defined]
     if not hasattr(tf.contrib.layers, "xavier_initializer_conv2d"):
-        tf.contrib.layers.xavier_initializer_conv2d = lambda: tf.keras.initializers.glorot_uniform()  # type: ignore[attr-defined]
+        tf.contrib.layers.xavier_initializer_conv2d = tf.glorot_uniform_initializer  # type: ignore[attr-defined]
 
     sys.modules["tensorflow"] = tf
     io_utils = load_module_from_path("io_utils", io_utils_path)
