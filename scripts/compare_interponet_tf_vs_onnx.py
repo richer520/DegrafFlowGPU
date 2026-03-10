@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import glob
 import importlib.util
 import os
 import sys
@@ -56,6 +57,55 @@ def load_module_from_path(module_name: str, module_path: str):
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def checkpoint_components_exist(prefix: str) -> bool:
+    return (
+        os.path.exists(prefix + ".index")
+        and os.path.exists(prefix + ".meta")
+        and bool(glob.glob(prefix + ".data-*"))
+    )
+
+
+def resolve_checkpoint_prefix(raw_path: str) -> str:
+    raw_path = os.path.expanduser(raw_path.strip())
+    raw_path = raw_path.rstrip("/\\")
+    candidates: List[str] = []
+
+    def add_candidate(p: str) -> None:
+        if p and p not in candidates:
+            candidates.append(p)
+
+    add_candidate(raw_path)
+    for suffix in (".meta", ".index", ".data-00000-of-00001"):
+        if raw_path.endswith(suffix):
+            add_candidate(raw_path[: -len(suffix)])
+
+    if os.path.isdir(raw_path):
+        for index_path in sorted(glob.glob(os.path.join(raw_path, "*.ckpt.index"))):
+            add_candidate(index_path[: -len(".index")])
+
+    parent_dir = raw_path if os.path.isdir(raw_path) else os.path.dirname(raw_path) or "."
+    base_name = os.path.basename(raw_path)
+    if os.path.isdir(parent_dir):
+        for index_path in sorted(glob.glob(os.path.join(parent_dir, "*.ckpt.index"))):
+            prefix = index_path[: -len(".index")]
+            if base_name and base_name in os.path.basename(prefix):
+                add_candidate(prefix)
+
+    for prefix in candidates:
+        if checkpoint_components_exist(prefix):
+            print(f"[INFO] Resolved checkpoint prefix: {prefix}")
+            return prefix
+
+    discovered = sorted(glob.glob(os.path.join(parent_dir, "*"))) if os.path.isdir(parent_dir) else []
+    discovered_text = "\n".join(f"  - {p}" for p in discovered[:50]) or "  - <none>"
+    raise FileNotFoundError(
+        "could not resolve a valid TF checkpoint prefix.\n"
+        f"input: {raw_path}\n"
+        f"searched directory: {parent_dir}\n"
+        f"directory contents:\n{discovered_text}"
+    )
 
 
 def import_interponet_modules(project_root: str):
@@ -177,8 +227,9 @@ def main() -> None:
         raise RuntimeError("onnxruntime is required. Please install it first.") from e
 
     root = args.project_root or str(Path(__file__).resolve().parents[1])
+    ckpt_prefix = resolve_checkpoint_prefix(args.ckpt_prefix)
     io_utils, utils, tf_mod, model_mod = import_interponet_modules(root)
-    tf_runner = TFRunnerCache(tf_mod, model_mod, args.ckpt_prefix)
+    tf_runner = TFRunnerCache(tf_mod, model_mod, ckpt_prefix)
 
     sess = ort.InferenceSession(args.onnx, providers=["CPUExecutionProvider"])
     input_names = [i.name for i in sess.get_inputs()]
