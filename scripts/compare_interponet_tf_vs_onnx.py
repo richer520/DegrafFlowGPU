@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import csv
-import importlib
+import importlib.util
 import os
 import sys
 import types
@@ -48,13 +48,26 @@ def first_existing(paths: List[str]) -> Optional[str]:
     return None
 
 
+def load_module_from_path(module_name: str, module_path: str):
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"failed to create import spec for {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def import_interponet_modules(project_root: str):
     interpo_py = os.path.join(project_root, "external", "InterpoNet")
-    if interpo_py not in sys.path:
-        sys.path.insert(0, interpo_py)
-
-    import io_utils  # type: ignore
-    import utils  # type: ignore
+    io_utils_path = os.path.join(interpo_py, "io_utils.py")
+    utils_path = os.path.join(interpo_py, "utils.py")
+    model_path = os.path.join(interpo_py, "model.py")
+    missing = [p for p in (io_utils_path, utils_path, model_path) if not os.path.exists(p)]
+    if missing:
+        raise FileNotFoundError(
+            "missing InterpoNet helper files:\n" + "\n".join(f"  - {p}" for p in missing)
+        )
 
     import tensorflow.compat.v1 as tf  # type: ignore
 
@@ -68,8 +81,9 @@ def import_interponet_modules(project_root: str):
         tf.contrib.layers.xavier_initializer_conv2d = lambda: tf.keras.initializers.glorot_uniform()  # type: ignore[attr-defined]
 
     sys.modules["tensorflow"] = tf
-    sys.modules.pop("model", None)
-    model = importlib.import_module("model")
+    io_utils = load_module_from_path("io_utils", io_utils_path)
+    utils = load_module_from_path("utils", utils_path)
+    model = load_module_from_path("model", model_path)
     return io_utils, utils, tf, model
 
 
