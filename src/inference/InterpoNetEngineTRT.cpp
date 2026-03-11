@@ -750,6 +750,7 @@ void buildInterpoNetEdgesInput(
     const cv::Mat &img1,
     int downscale,
     const cv::Mat *precomputed_edges_full,
+    const std::string &downscale_mode,
     std::vector<float> &edges_nhwc,
     int &low_h,
     int &low_w)
@@ -782,7 +783,23 @@ void buildInterpoNetEdgesInput(
 
     cv::Mat edges_trim = edges_f(cv::Rect(0, 0, trim_w, trim_h));
     cv::Mat edges_low;
-    cv::resize(edges_trim, edges_low, cv::Size(low_w, low_h), 0, 0, cv::INTER_AREA);
+    const std::string mode = toLower(downscale_mode);
+    if (mode == "python_like")
+    {
+        // Approximate skimage.transform.rescale(..., preserve_range=True) defaults:
+        // bilinear interpolation + anti-aliasing for downsampling.
+        const double sigma = std::max(0.0, (static_cast<double>(downscale) - 1.0) * 0.5);
+        cv::Mat edges_prefilter = edges_trim;
+        if (sigma > 0.0)
+        {
+            cv::GaussianBlur(edges_trim, edges_prefilter, cv::Size(), sigma, sigma, cv::BORDER_REFLECT_101);
+        }
+        cv::resize(edges_prefilter, edges_low, cv::Size(low_w, low_h), 0, 0, cv::INTER_LINEAR);
+    }
+    else
+    {
+        cv::resize(edges_trim, edges_low, cv::Size(low_w, low_h), 0, 0, cv::INTER_AREA);
+    }
     for (int y = 0; y < low_h; ++y)
     {
         const float *row = edges_low.ptr<float>(y);
@@ -797,6 +814,7 @@ void buildInterpoNetInputsFromMatches(
     const SparseFlowMatches *matches_ba,
     int downscale,
     const cv::Mat *precomputed_edges_full,
+    const std::string &edges_downscale_mode,
     std::vector<float> &image_nhwc,
     std::vector<float> &mask_nhwc,
     std::vector<float> &edges_nhwc,
@@ -824,7 +842,8 @@ void buildInterpoNetInputsFromMatches(
         mask_nhwc = std::move(mask_ab);
     }
 
-    buildInterpoNetEdgesInput(img1, downscale, precomputed_edges_full, edges_nhwc, low_h, low_w);
+    buildInterpoNetEdgesInput(
+        img1, downscale, precomputed_edges_full, edges_downscale_mode, edges_nhwc, low_h, low_w);
 }
 
 bool densifyWithEpic(
@@ -1306,6 +1325,8 @@ bool InterpoNetEngineTRT::densifyBatch(
         interponet_downscale = 8;
     const std::string edges_dir = envOrDefault("DEGRAF_INTERPONET_EDGES_DIR", "");
     const bool require_sed_edges = envEnabled("DEGRAF_INTERPONET_REQUIRE_SED", false);
+    const std::string edges_downscale_mode =
+        envOrDefault("DEGRAF_INTERPONET_EDGES_DOWNSCALE_MODE", "python_like");
     int edges_start_index = 0;
     envInt("DEGRAF_INTERPONET_EDGES_START_INDEX", edges_start_index);
     const std::string debug_dump_dir = envOrDefault("DEGRAF_INTERPONET_DEBUG_DUMP_DIR", "");
@@ -1427,6 +1448,7 @@ bool InterpoNetEngineTRT::densifyBatch(
                 matches_ba,
                 interponet_downscale,
                 sed_edges.empty() ? nullptr : &sed_edges,
+                edges_downscale_mode,
                 image_nhwc,
                 mask_nhwc,
                 edges_nhwc,
