@@ -229,27 +229,6 @@ bool loadEdgesDatFile(const std::string &path, int width, int height, cv::Mat &e
     return ifs.good();
 }
 
-void upscaleLowFlowToFullRes(
-    const cv::Mat &low_flow,
-    const cv::Size &full_size,
-    const std::string &mode,
-    cv::Mat &dense_flow)
-{
-    const std::string m = toLower(mode);
-    int interp = cv::INTER_CUBIC; // legacy behavior
-    if (m == "linear")
-        interp = cv::INTER_LINEAR;
-    else if (m == "nearest")
-        interp = cv::INTER_NEAREST;
-    else if (m == "lanczos4")
-        interp = cv::INTER_LANCZOS4;
-    else if (m == "area")
-        interp = cv::INTER_AREA;
-    // "opencv_cubic" and "python_like" currently share cubic interpolation.
-    // Keeping both labels allows protocol A/B tracing and future refinement.
-    cv::resize(low_flow, dense_flow, full_size, 0, 0, interp);
-}
-
 #if DEGRAF_HAVE_TENSORRT
 class TrtLogger final : public nvinfer1::ILogger
 {
@@ -1340,8 +1319,6 @@ bool InterpoNetEngineTRT::densifyBatch(
     const std::string trt_engine_path = envOrDefault(
         "DEGRAF_INTERPONET_ENGINE_PATH",
         getProjectRoot() + "/external/InterpoNet/models/interponet_kitti_fp32.engine");
-    const std::string upsample_mode =
-        envOrDefault("DEGRAF_INTERPONET_UPSAMPLE_MODE", "opencv_cubic");
     int interponet_downscale = 8;
     envInt("DEGRAF_INTERPONET_DOWNSCALE", interponet_downscale);
     if (interponet_downscale <= 0)
@@ -1499,7 +1476,7 @@ bool InterpoNetEngineTRT::densifyBatch(
             cv::Mat low_flow;
             if (trt_ready && trt_runner->inferFlow(image_nhwc, mask_nhwc, edges_nhwc, low_h, low_w, low_flow))
             {
-                upscaleLowFlowToFullRes(low_flow, batch_i1[i].size(), upsample_mode, dense_flow);
+                cv::resize(low_flow, dense_flow, batch_i1[i].size(), 0, 0, cv::INTER_CUBIC);
                 interpolate_ok = !dense_flow.empty();
                 used_trt = interpolate_ok;
                 if (interpolate_ok)
@@ -1530,7 +1507,6 @@ bool InterpoNetEngineTRT::densifyBatch(
             std::cout << "[PROFILE][InterpoNetEngineTRT][Frame " << i << "] backend="
                       << ((backend == "trt" && used_trt) ? "trt" : "epic")
                       << " downscale=" << interponet_downscale
-                      << " upsample_mode=" << upsample_mode
                       << " edges_source=" << edges_source
                       << " sparse_points=" << batch_matches[i].src_points.size()
                       << " ba_sparse_points=" << ((batch_matches_ba && i < batch_matches_ba->size())
