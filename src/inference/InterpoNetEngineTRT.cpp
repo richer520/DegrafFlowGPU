@@ -902,6 +902,74 @@ bool writeFlowFile(const std::string &path, const cv::Mat &flow)
     return file.good();
 }
 
+bool writeFloatDatFile(const std::string &path, const std::vector<float> &values)
+{
+    std::ofstream file(path.c_str(), std::ios::binary);
+    if (!file.good())
+        return false;
+    if (!values.empty())
+    {
+        file.write(reinterpret_cast<const char *>(values.data()),
+                   static_cast<std::streamsize>(values.size() * sizeof(float)));
+    }
+    return file.good();
+}
+
+bool dumpInterpoInputTensors(
+    const std::string &debug_dump_dir,
+    int frame_id,
+    const std::vector<float> &image_nhwc,
+    const std::vector<float> &mask_nhwc,
+    const std::vector<float> &edges_nhwc,
+    int low_h,
+    int low_w,
+    int downscale,
+    const std::string &edges_source,
+    bool used_ba)
+{
+    if (debug_dump_dir.empty() || low_h <= 0 || low_w <= 0)
+        return false;
+    if (image_nhwc.size() != static_cast<size_t>(low_h) * low_w * 2 ||
+        mask_nhwc.size() != static_cast<size_t>(low_h) * low_w ||
+        edges_nhwc.size() != static_cast<size_t>(low_h) * low_w)
+        return false;
+
+    const std::string image_path =
+        cv::utils::fs::join(debug_dump_dir, cv::format("%06d_cpp_input_image.flo", frame_id));
+    const std::string mask_path =
+        cv::utils::fs::join(debug_dump_dir, cv::format("%06d_cpp_input_mask.dat", frame_id));
+    const std::string edges_path =
+        cv::utils::fs::join(debug_dump_dir, cv::format("%06d_cpp_input_edges.dat", frame_id));
+    const std::string meta_path =
+        cv::utils::fs::join(debug_dump_dir, cv::format("%06d_cpp_input_meta.txt", frame_id));
+
+    cv::Mat image_mat(low_h, low_w, CV_32FC2, const_cast<float *>(image_nhwc.data()));
+    if (!writeFlowFile(image_path, image_mat))
+        return false;
+    if (!writeFloatDatFile(mask_path, mask_nhwc))
+        return false;
+    if (!writeFloatDatFile(edges_path, edges_nhwc))
+        return false;
+
+    int valid_count = 0;
+    for (float v : mask_nhwc)
+    {
+        if (v > 0.0f)
+            ++valid_count;
+    }
+
+    std::ofstream meta(meta_path.c_str());
+    if (!meta.good())
+        return false;
+    meta << "low_h=" << low_h << "\n";
+    meta << "low_w=" << low_w << "\n";
+    meta << "downscale=" << downscale << "\n";
+    meta << "mask_valid_count=" << valid_count << "\n";
+    meta << "edges_source=" << edges_source << "\n";
+    meta << "used_ba=" << (used_ba ? 1 : 0) << "\n";
+    return meta.good();
+}
+
 cv::Mat readFlowFile(const std::string &path)
 {
     std::ifstream file(path.c_str(), std::ios::binary);
@@ -1244,6 +1312,7 @@ bool InterpoNetEngineTRT::densifyBatch(
     int debug_start_index = 0;
     envInt("DEGRAF_INTERPONET_DEBUG_START_INDEX", debug_start_index);
     const bool debug_dump_lowres = envEnabled("DEGRAF_INTERPONET_DEBUG_DUMP_LOWRES", false);
+    const bool debug_dump_inputs = envEnabled("DEGRAF_INTERPONET_DEBUG_DUMP_INPUTS", false);
     if (!debug_dump_dir.empty() && !cv::utils::fs::exists(debug_dump_dir))
         cv::utils::fs::createDirectories(debug_dump_dir);
 
@@ -1363,6 +1432,25 @@ bool InterpoNetEngineTRT::densifyBatch(
                 edges_nhwc,
                 low_h,
                 low_w);
+            if (debug_dump_inputs && !debug_dump_dir.empty())
+            {
+                const int frame_id = debug_start_index + static_cast<int>(i);
+                if (dumpInterpoInputTensors(
+                        debug_dump_dir,
+                        frame_id,
+                        image_nhwc,
+                        mask_nhwc,
+                        edges_nhwc,
+                        low_h,
+                        low_w,
+                        interponet_downscale,
+                        edges_source,
+                        matches_ba != nullptr))
+                {
+                    std::cout << "[PROFILE][InterpoNetEngineTRT][Frame " << i
+                              << "] dumped_input_tensors=" << debug_dump_dir << std::endl;
+                }
+            }
             cv::Mat low_flow;
             if (trt_ready && trt_runner->inferFlow(image_nhwc, mask_nhwc, edges_nhwc, low_h, low_w, low_flow))
             {
